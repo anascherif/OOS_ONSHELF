@@ -51,23 +51,45 @@ def _load_params(cfg: dict | None = None) -> dict:
         "shelf_light_upper": _arr("shelf_light_upper", cfg),
         "yogurt_lower"     : _arr("yogurt_lower", cfg),
         "yogurt_upper"     : _arr("yogurt_upper", cfg),
+        "ignore_lower"     : _arr("ignore_lower", cfg),
+        "ignore_upper"     : _arr("ignore_upper", cfg),
+        "exclude_regions"  : cfg.get("exclude_regions", []),
         "morph_k"          : cfg.get("morph_kernel", 7),
         "alert_threshold"  : cfg.get("alert_threshold", 30.0),
+        "ref_dims"         : cfg.get("image_size"),
     }
 
 
-def load_and_crop(image_path: str, params: dict) -> np.ndarray:
+def load_and_crop(image_path: str,
+                  params: dict) -> tuple[np.ndarray, np.ndarray, tuple[int, int, int, int]]:
     img = cv2.imread(image_path)
     if img is None:
         raise FileNotFoundError("Cannot load: '{}'".format(image_path))
+    h, w = img.shape[:2]
     roi = params["roi"]
+    ref_dims = params.get("ref_dims")
+
     if roi is not None:
         y1, y2, x1, x2 = roi
-        img = img[y1:y2, x1:x2]
-    return img
+        if ref_dims is not None:
+            rw, rh = ref_dims
+            y1 = int(y1 * h / rh)
+            y2 = int(y2 * h / rh)
+            x1 = int(x1 * w / rw)
+            x2 = int(x2 * w / rw)
+        y1 = max(0, y1); y2 = min(h, y2)
+        x1 = max(0, x1); x2 = min(w, x2)
+        scaled_roi = (y1, y2, x1, x2)
+        crop = img[y1:y2, x1:x2]
+    else:
+        scaled_roi = (0, h, 0, w)
+        crop = img.copy()
+
+    return img, crop, scaled_roi
 
 
-def build_shelf_mask(bgr_crop: np.ndarray, params: dict) -> np.ndarray:
+def build_shelf_mask(bgr_crop: np.ndarray,
+                     params: dict) -> tuple[np.ndarray, np.ndarray | None]:
     hsv      = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
     h, w     = bgr_crop.shape[:2]
     combined = np.zeros((h, w), dtype=np.uint8)
@@ -90,18 +112,58 @@ def build_shelf_mask(bgr_crop: np.ndarray, params: dict) -> np.ndarray:
         yogurt   = cv2.inRange(hsv, yl, yu)
         combined = cv2.bitwise_and(combined, cv2.bitwise_not(yogurt))
 
-    k       = cv2.getStructuringElement(cv2.MORPH_RECT,
+    il = params["ignore_lower"]
+    iu = params["ignore_upper"]
+    ignore_mask: np.ndarray | None = None
+    if il is not None and iu is not None:
+        ignore_mask = cv2.inRange(hsv, il, iu)
+        combined = cv2.bitwise_and(combined, cv2.bitwise_not(ignore_mask))
+
+    k_open  = cv2.getStructuringElement(cv2.MORPH_RECT,
                                         (params["morph_k"], params["morph_k"]))
-    cleaned = cv2.morphologyEx(combined, cv2.MORPH_OPEN,  k)
-    cleaned = cv2.morphologyEx(cleaned,  cv2.MORPH_CLOSE, k)
-    return cleaned
+    k_close = cv2.getStructuringElement(cv2.MORPH_RECT,
+                                        (params["morph_k"] * 7, params["morph_k"] * 7))
+    cleaned = cv2.morphologyEx(combined, cv2.MORPH_OPEN,  k_open)
+    cleaned = cv2.morphologyEx(cleaned,  cv2.MORPH_CLOSE, k_close)
+    return cleaned, ignore_mask
 
 
-def calculate_stock(mask: np.ndarray) -> dict:
+def build_exclude_mask(crop_shape: tuple, exclude_regions: list,
+                        roi: list | None) -> np.ndarray | None:
+    if not exclude_regions:
+        return None
+    h, w = crop_shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if roi is not None:
+        ref_crop_h = roi[1] - roi[0]
+        ref_crop_w = roi[3] - roi[2]
+    else:
+        ref_crop_h = ref_crop_w = 1
+    for ey1, ey2, ex1, ex2 in exclude_regions:
+        sy1 = int(ey1 * h / ref_crop_h)
+        sy2 = int(ey2 * h / ref_crop_h)
+        sx1 = int(ex1 * w / ref_crop_w)
+        sx2 = int(ex2 * w / ref_crop_w)
+        sy1 = max(0, sy1); sy2 = min(h, sy2)
+        sx1 = max(0, sx1); sx2 = min(w, sx2)
+        if sy2 > sy1 and sx2 > sx1:
+            mask[sy1:sy2, sx1:sx2] = 255
+    return mask
+
+
+def calculate_stock(mask: np.ndarray,
+                    ignore_mask: np.ndarray | None = None) -> dict:
     total    = mask.shape[0] * mask.shape[1]
     shelf_px = cv2.countNonZero(mask)
-    stock    = round(((total - shelf_px) / total) * 100, 2)
-    empty    = round(100 - stock, 2)
+
+    if ignore_mask is not None:
+        excluded   = cv2.countNonZero(ignore_mask)
+        overlapped = cv2.countNonZero(cv2.bitwise_and(mask, ignore_mask))
+        shelf_px   = shelf_px - overlapped
+        total      = total - excluded
+
+    stock = round(((total - shelf_px) / total) * 100, 2) if total > 0 else 0
+    empty = round(100 - stock, 2)
     return {
         "total_pixels": total,
         "shelf_pixels": shelf_px,
@@ -110,22 +172,33 @@ def calculate_stock(mask: np.ndarray) -> dict:
     }
 
 
-def save_debug(bgr_crop: np.ndarray, mask: np.ndarray,
-               image_path: str, stock_pct: float) -> str:
-    overlay = bgr_crop.copy()
-    overlay[mask > 0] = [0, 0, 220]
-    orig    = bgr_crop.copy()
-    font    = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(orig,    "ORIGINAL",
-                (8,20), font, 0.5, (255,255,255), 1)
-    cv2.putText(overlay, "RED=EMPTY SHELF | Stock: {}%".format(stock_pct),
-                (8,20), font, 0.45, (0,0,220), 1)
-    debug  = np.vstack([orig, overlay])
-    sc     = 900 / debug.shape[0]
-    w_new  = int(debug.shape[1] * sc)
-    debug  = cv2.resize(debug, (w_new, 900))
-    mid    = 900 // 2
-    cv2.line(debug, (0,mid), (debug.shape[1],mid), (255,255,255), 2)
+def save_debug(orig: np.ndarray, mask: np.ndarray,
+               scaled_roi: tuple[int, int, int, int],
+               image_path: str, stock_pct: float,
+               ignore_mask: np.ndarray | None = None) -> str:
+    y1, y2, x1, x2 = scaled_roi
+    h, w = orig.shape[:2]
+
+    full_mask = np.zeros((h, w), dtype=np.uint8)
+    full_mask[y1:y2, x1:x2] = mask
+
+    overlay = orig.copy()
+    overlay[full_mask > 0] = [0, 0, 220]
+
+    if ignore_mask is not None:
+        full_ignore = np.zeros((h, w), dtype=np.uint8)
+        full_ignore[y1:y2, x1:x2] = ignore_mask
+        overlay[full_ignore > 0] = [255, 120, 0]
+
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    label = "RED=shelf  BLUE=ignored(tags)  Stock: {}%".format(stock_pct)
+    cv2.putText(overlay, label, (8, 24), font, 0.45, (0, 255, 0), 1)
+
+    sc    = 900 / overlay.shape[0]
+    w_new = int(overlay.shape[1] * sc)
+    debug = cv2.resize(overlay, (w_new, 900))
 
     base_dir = os.path.dirname(os.path.abspath(image_path))
     name, ext  = os.path.splitext(os.path.basename(image_path))
@@ -137,13 +210,26 @@ def save_debug(bgr_crop: np.ndarray, mask: np.ndarray,
 def analyze(image_path: str, save_debug_img: bool = True) -> dict:
     cfg    = _get_cfg()
     params = _load_params(cfg)
-    crop    = load_and_crop(image_path, params)
-    mask    = build_shelf_mask(crop, params)
-    metrics = calculate_stock(mask)
+    orig, crop, scaled_roi = load_and_crop(image_path, params)
+    mask, ignore_hsv = build_shelf_mask(crop, params)
+
+    exclude_mask = build_exclude_mask(
+        crop.shape, params.get("exclude_regions", []),
+        params["roi"])
+
+    ignore_mask = ignore_hsv
+    if exclude_mask is not None:
+        if ignore_mask is not None:
+            ignore_mask = cv2.bitwise_or(ignore_mask, exclude_mask)
+        else:
+            ignore_mask = exclude_mask
+
+    metrics = calculate_stock(mask, ignore_mask)
 
     debug_path: str | None = None
     if save_debug_img:
-        debug_path = save_debug(crop, mask, image_path, metrics["stock_pct"])
+        debug_path = save_debug(orig, mask, scaled_roi, image_path,
+                                metrics["stock_pct"], ignore_mask)
 
     metrics["image_path"] = image_path
     metrics["debug_path"] = debug_path
