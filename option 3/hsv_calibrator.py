@@ -44,9 +44,10 @@ WIN_H        = 700
 CONFIG_PATH  = os.path.join(_SCRIPT_DIR, "shelf_config.json")
 
 MODES = {
-    'd': {'name': 'DARK SHELF',       'color': (0, 165, 255), 'points': [], 'hsv': []},
-    'l': {'name': 'LIGHT SHELF',      'color': (0, 255, 255), 'points': [], 'hsv': []},
-    'y': {'name': 'YOGURT (exclude)', 'color': (0,   0, 255), 'points': [], 'hsv': []},
+    'd': {'name': 'DARK SHELF',         'color': (0, 165, 255), 'points': [], 'hsv': []},
+    'l': {'name': 'LIGHT SHELF',        'color': (0, 255, 255), 'points': [], 'hsv': []},
+    'y': {'name': 'YOGURT (exclude)',   'color': (0,   0, 255), 'points': [], 'hsv': []},
+    'i': {'name': 'IGNORE / TAGS',      'color': (255, 120, 0), 'points': [], 'hsv': []},
 }
 
 
@@ -147,6 +148,46 @@ def build_phase1_display(img_orig: np.ndarray, scale: float,
     return np.vstack([hud, disp]), hud_h
 
 
+def build_phase3_display(img_crop: np.ndarray, scale: float,
+                          exclude_rects: list,
+                          drag_start: tuple | None,
+                          drag_current: tuple | None) -> tuple[np.ndarray, int]:
+    ih, iw   = img_crop.shape[:2]
+    disp_h   = int(ih * scale)
+    disp_w   = int(iw * scale)
+    disp     = cv2.resize(img_crop.copy(), (disp_w, disp_h))
+
+    for ey1, ey2, ex1, ex2 in exclude_rects:
+        cv2.rectangle(disp,
+                      (int(ex1*scale), int(ey1*scale)),
+                      (int(ex2*scale), int(ey2*scale)),
+                      (255, 100, 0), 2)
+        cv2.putText(disp, "excluded",
+                    (int(ex1*scale)+4, int(ey1*scale)+20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,100,0), 1)
+
+    if drag_start and drag_current:
+        x1 = int(drag_start[1] * scale)
+        y1 = int(drag_start[0] * scale)
+        x2 = int(drag_current[1] * scale)
+        y2 = int(drag_current[0] * scale)
+        cv2.rectangle(disp, (x1, y1), (x2, y2), (255, 200, 0), 2)
+        cv2.putText(disp, "Release to add exclusion",
+                    (x1+4, y1+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,200,0), 1)
+
+    hud_h = 70
+    hud   = np.zeros((hud_h, disp_w, 3), dtype=np.uint8)
+    hud[:] = (30, 30, 30)
+    cv2.rectangle(hud, (0,0), (disp_w, 28), (255,100,0), -1)
+    cv2.putText(hud, "PHASE 3 - Draw exclusion rectangles around price tags",
+                (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 2)
+    cv2.putText(hud,
+                "Click + drag to draw box  [C] Clear  [ENTER] Save  [Q] Back",
+                (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200,200,200), 1)
+
+    return np.vstack([hud, disp]), hud_h
+
+
 def build_phase2_display(img_crop: np.ndarray, hsv_crop: np.ndarray,
                          scale: float, crop_box: tuple,
                          current_mode: str) -> tuple[np.ndarray, int]:
@@ -193,9 +234,10 @@ def build_phase2_display(img_crop: np.ndarray, hsv_crop: np.ndarray,
     d = len(MODES['d']['hsv'])
     l = len(MODES['l']['hsv'])
     y = len(MODES['y']['hsv'])
+    i = len(MODES['i']['hsv'])
     cv2.putText(hud,
                 "[D] Dark shelf({})  [L] Light shelf({})  [Y] Yogurt({})"
-                "   [C] Clear  [R] Reset  [S] Save & exit  [Q] Quit".format(d, l, y),
+                "  [I] Ignore/tags({})   [C] Clear  [R] Reset  [S] Save  [Q] Quit".format(d, l, y, i),
                 (8, 55), font, 0.38, (200,200,200), 1)
     cv2.putText(hud,
                 "Stock estimate: {}%   Crop: {}".format(stock_pct, crop_box),
@@ -205,7 +247,8 @@ def build_phase2_display(img_crop: np.ndarray, hsv_crop: np.ndarray,
 
 
 def save_config(image_path: str, img_orig: np.ndarray,
-                crop_box: tuple | None) -> bool:
+                crop_box: tuple | None,
+                exclude_rects: list | None = None) -> bool:
     if crop_box is None:
         print("  Warning: No crop box defined. Draw the crop box first.")
         return False
@@ -214,6 +257,8 @@ def save_config(image_path: str, img_orig: np.ndarray,
     light_l, light_u = compute_range(MODES['l']['hsv'])
     yog_l,   yog_u   = compute_range(MODES['y']['hsv'],
                                      tol_h=12, tol_s=20, tol_v=25)
+    ignore_l, ignore_u = compute_range(MODES['i']['hsv'],
+                                       tol_h=10, tol_s=15, tol_v=25)
 
     if dark_l is None and light_l is None:
         print("  Warning: No shelf color points. Sample shelf colors first.")
@@ -221,6 +266,11 @@ def save_config(image_path: str, img_orig: np.ndarray,
 
     ih, iw = img_orig.shape[:2]
     x1, y1, x2, y2 = crop_box
+
+    rects_list = []
+    if exclude_rects:
+        for ey1, ey2, ex1, ex2 in exclude_rects:
+            rects_list.append([int(ey1), int(ey2), int(ex1), int(ex2)])
 
     config = {
         "roi"               : [int(y1), int(y2), int(x1), int(x2)],
@@ -230,6 +280,9 @@ def save_config(image_path: str, img_orig: np.ndarray,
         "shelf_light_upper" : light_u.tolist() if light_u is not None else None,
         "yogurt_lower"      : yog_l.tolist()   if yog_l   is not None else None,
         "yogurt_upper"      : yog_u.tolist()   if yog_u   is not None else None,
+        "ignore_lower"      : ignore_l.tolist() if ignore_l is not None else None,
+        "ignore_upper"      : ignore_u.tolist() if ignore_u is not None else None,
+        "exclude_regions"   : rects_list,
         "morph_kernel"      : 7,
         "alert_threshold"   : 30.0,
         "calibrated_on"     : os.path.basename(image_path),
@@ -249,6 +302,11 @@ def save_config(image_path: str, img_orig: np.ndarray,
         print("  Light shelf      : {} / {}".format(light_l.tolist(), light_u.tolist()))
     if yog_l is not None and yog_u is not None:
         print("  Yogurt exclude   : {} / {}".format(yog_l.tolist(), yog_u.tolist()))
+    if ignore_l is not None and ignore_u is not None:
+        print("  Ignore/tags      : {} / {}".format(ignore_l.tolist(), ignore_u.tolist()))
+    if rects_list:
+        for i, r in enumerate(rects_list):
+            print("  Exclude rect {}  : {}".format(i+1, r))
     print()
     print("  Next steps:")
     print("  1. python shelf_monitor.py <any_photo.jpg>")
@@ -273,14 +331,19 @@ def main() -> None:
     ih, iw = img_orig.shape[:2]
     scale_p1 = WIN_H / ih
 
-    crop_box:     tuple | None = None
-    drawing_crop  = False
-    drag_start:   tuple | None = None
-    drag_current: tuple | None = None
-    phase         = 1
-    current_mode  = 'd'
-    img_crop:     np.ndarray | None = None
-    hsv_crop:     np.ndarray | None = None
+    crop_box:        tuple | None = None
+    drawing_crop     = False
+    drag_start:      tuple | None = None
+    drag_current:    tuple | None = None
+    phase            = 1
+    current_mode     = 'd'
+    img_crop:        np.ndarray | None = None
+    hsv_crop:        np.ndarray | None = None
+    scale_p2         = 1.0
+    exclude_rects:   list[tuple] = []
+    drawing_exclude  = False
+    excl_start:      tuple | None = None
+    excl_current:    tuple | None = None
 
     print()
     print("  Image: {}  ({}x{} px)".format(os.path.basename(image_path), iw, ih))
@@ -293,7 +356,8 @@ def main() -> None:
 
     def on_mouse(event: int, wx: int, wy: int, flags: int, param) -> None:
         nonlocal crop_box, drawing_crop, drag_start, drag_current, phase
-        nonlocal img_crop, hsv_crop, current_mode
+        nonlocal img_crop, hsv_crop, current_mode, scale_p2
+        nonlocal exclude_rects, drawing_exclude, excl_start, excl_current
 
         if phase == 1:
             ix = int(wx / scale_p1)
@@ -361,6 +425,44 @@ def main() -> None:
                 img_crop, hsv_crop, scale_p2, crop_box, current_mode)
             cv2.imshow(win, frame)
 
+        elif phase == 3:
+            if crop_box is None or img_crop is None:
+                return
+            crop_h = crop_box[3] - crop_box[1]
+            crop_w = crop_box[2] - crop_box[0]
+            s3 = WIN_H / max(crop_h, 1)
+
+            iy = int((wy - 70) / s3)
+            ix = int(wx / s3)
+            ix = max(0, min(ix, crop_w-1))
+            iy = max(0, min(iy, crop_h-1))
+
+            if event == cv2.EVENT_LBUTTONDOWN:
+                drawing_exclude = True
+                excl_start = (iy, ix)
+                excl_current = (iy, ix)
+
+            elif event == cv2.EVENT_MOUSEMOVE and drawing_exclude:
+                excl_current = (iy, ix)
+                frame, _ = build_phase3_display(
+                    img_crop, s3, exclude_rects, excl_start, excl_current)
+                cv2.imshow(win, frame)
+
+            elif event == cv2.EVENT_LBUTTONUP and drawing_exclude:
+                drawing_exclude = False
+                if excl_start is not None:
+                    ey1 = min(excl_start[0], iy)
+                    ey2 = max(excl_start[0], iy)
+                    ex1 = min(excl_start[1], ix)
+                    ex2 = max(excl_start[1], ix)
+                    if (ey2-ey1) > 5 and (ex2-ex1) > 5:
+                        exclude_rects.append((ey1, ey2, ex1, ex2))
+                        print("  Exclude rect added: y={}->{}, x={}->{}".format(ey1, ey2, ex1, ex2))
+                excl_current = None
+                frame, _ = build_phase3_display(
+                    img_crop, s3, exclude_rects, excl_start, excl_current)
+                cv2.imshow(win, frame)
+
     cv2.setMouseCallback(win, on_mouse)
 
     frame, _ = build_phase1_display(img_orig, scale_p1, None, None, None)
@@ -393,7 +495,7 @@ def main() -> None:
             print("  Crop confirmed: {}x{} px".format(
                 img_crop.shape[1], img_crop.shape[0]))
             print("  PHASE 2: Sample shelf colors.")
-            print("  [D] Dark shelf  [L] Light shelf  [Y] Yogurt  [S] Save")
+            print("  [D] Dark shelf  [L] Light shelf  [Y] Yogurt  [S] Exclude rects")
             print()
 
             frame, _ = build_phase2_display(
@@ -417,6 +519,10 @@ def main() -> None:
                 current_mode = 'y'
                 print()
                 print("  --- MODE: YOGURT (exclude) ---")
+            elif key in (ord('i'), ord('I')):
+                current_mode = 'i'
+                print()
+                print("  --- MODE: IGNORE / TAGS ---")
             elif key in (ord('c'), ord('C')):
                 n = len(MODES[current_mode]['points'])
                 MODES[current_mode]['points'].clear()
@@ -429,8 +535,23 @@ def main() -> None:
                     m['hsv'].clear()
                 print("  Reset - all color points cleared.")
             elif key in (ord('s'), ord('S')):
-                if save_config(image_path, img_orig, crop_box):
-                    break
+                if crop_box is None:
+                    continue
+                phase = 3
+                print()
+                print("  PHASE 3: Draw exclusion rectangles around price tags/banners.")
+                print("  Click + drag to draw. [ENTER] Save  [C] Clear  [Q] Back")
+                print()
+                crop_h = crop_box[3] - crop_box[1]
+                s3 = WIN_H / max(crop_h, 1)
+                if img_crop is not None:
+                    frame, _ = build_phase3_display(
+                        img_crop, s3, exclude_rects, None, None)
+                    h_panel = frame.shape[0]
+                    w_panel = frame.shape[1]
+                    win_w   = int(w_panel * WIN_H / h_panel)
+                    cv2.resizeWindow(win, win_w, WIN_H)
+                    cv2.imshow(win, frame)
                 continue
             else:
                 continue
@@ -442,6 +563,33 @@ def main() -> None:
             frame, _ = build_phase2_display(
                 img_crop, hsv_crop, scale_p2, crop_box, current_mode)
             cv2.imshow(win, frame)
+
+        elif phase == 3:
+            if key == 13:
+                if save_config(image_path, img_orig, crop_box, exclude_rects):
+                    break
+                continue
+            elif key in (ord('c'), ord('C')):
+                exclude_rects.clear()
+                print("  Exclude rectangles cleared.")
+                if img_crop is not None and crop_box is not None:
+                    crop_h = crop_box[3] - crop_box[1]
+                    s3 = WIN_H / max(crop_h, 1)
+                    frame, _ = build_phase3_display(
+                        img_crop, s3, exclude_rects, None, None)
+                    cv2.imshow(win, frame)
+            elif key in (ord('q'), ord('Q')):
+                phase = 2
+                print()
+                print("  Back to Phase 2. Press S to return to exclusion or edit colors.")
+                print()
+                if img_crop is not None and hsv_crop is not None and crop_box is not None:
+                    crop_h = crop_box[3] - crop_box[1]
+                    scale_p2 = WIN_H / max(crop_h, 1)
+                    frame, _ = build_phase2_display(
+                        img_crop, hsv_crop, scale_p2, crop_box, current_mode)
+                    cv2.imshow(win, frame)
+                    cv2.resizeWindow(win, int(frame.shape[1] * WIN_H / frame.shape[0]), WIN_H)
 
     cv2.destroyAllWindows()
 
