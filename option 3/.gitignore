@@ -1,0 +1,13 @@
+# Real credentials — never commit
+alert_config.json
+
+# Generated at runtime
+results.csv
+shelf_config.json
+
+# Cooldown timestamp
+.last_alert_time
+
+# Python bytecode
+__pycache__/
+*.pyc
