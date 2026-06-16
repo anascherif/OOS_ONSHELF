@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy this file to alert_config.json and fill in your real credentials.",
+
+  "gmail": {
+    "enabled": false,
+    "sender_email": "your_email@gmail.com",
+    "app_password": "your-16-char-app-password-here",
+    "recipient_email": "manager@store.com"
+  },
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+    "chat_id": "123456789"
+  },
+
+  "whatsapp": {
+    "enabled": false,
+    "api_url": "http://localhost:8002/send",
+    "recipient_number": "21612345678"
+  },
+
+  "cooldown_minutes": 30
+}
