@@ -1,0 +1,46 @@
+# =========================
+# Root .gitignore
+# =========================
+
+# --- Python (backend) ---
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# --- Node (frontend) ---
+node_modules/
+.next/
+out/
+build/
+
+# --- Environment & secrets ---
+.env
+.env*.local
+alert_config.json
+
+# --- Runtime data (generated, not committed) ---
+results.csv
+results_bak.csv
+shelf_config.json
+.last_alert_time
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editor files ---
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# --- v0 sandbox artifacts ---
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/

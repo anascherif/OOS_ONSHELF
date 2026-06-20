@@ -1,0 +1,22 @@
+# Backend-specific ignores (root .gitignore covers common entries)
+
+# Real credentials
+alert_config.json
+
+# Generated at runtime
+results.csv
+results_bak.csv
+shelf_config.json
+
+# Cooldown timestamp
+.last_alert_time
+
+# Processed photos and debug images (runtime artifacts)
+archive/photos/*
+archive/debug/*
+!archive/photos/.gitkeep
+!archive/debug/.gitkeep
+
+# Incoming folder (camera drops photos here)
+incoming/*
+!incoming/.gitkeep
