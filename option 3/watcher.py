@@ -92,6 +92,8 @@ def setup() -> None:
                 "missed_units",
                 "daily_loss_tnd",
                 "daily_missed_units",
+                "projected_loss_tnd",
+                "recoverable_tnd",
             ])
         print("  Created {}".format(RESULTS_CSV))
 
@@ -101,7 +103,9 @@ def log_result(metrics: dict, filename: str,
                scan_loss: float = 0.0,
                missed_units: float = 0.0,
                daily_loss: float = 0.0,
-               daily_missed_units: float = 0.0) -> tuple[str, str]:
+               daily_missed_units: float = 0.0,
+               projected_loss: float = 0.0,
+               recoverable: float = 0.0) -> tuple[str, str]:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status    = "CRITICAL" if metrics["alert"] else "OK"
 
@@ -118,6 +122,8 @@ def log_result(metrics: dict, filename: str,
             round(missed_units, 2),
             round(daily_loss, 4),
             round(daily_missed_units, 2),
+            round(projected_loss, 4),
+            round(recoverable, 4),
         ])
 
     return timestamp, status
@@ -184,7 +190,8 @@ def process_image(img_path: Path) -> None:
 
         timestamp, status = log_result(metrics, img_path.name, debug_name,
                                         scan_loss, missed_units,
-                                        daily_loss, daily_missed_units)
+                                        daily_loss, daily_missed_units,
+                                        projected_loss, recoverable)
 
         print("  Done")
         print("  Stock    : {}%".format(metrics['stock_pct']))
