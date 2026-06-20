@@ -48,6 +48,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shelf_monitor as monitor
 import alerts
 
+# --- Mock financial constants for Opportunity Cost POC ---
+SALES_PER_HOUR = 20
+UNIT_PRICE = 0.5
+SCAN_INTERVAL_HOURS = 0.25
+
+daily_loss         = 0.0
+daily_missed_units = 0.0
+# ---------------------------------------------------------
+
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
 INCOMING_DIR    = _SCRIPT_DIR / "incoming"
@@ -77,12 +86,20 @@ def setup() -> None:
                 "empty_pct",
                 "status",
                 "debug_file",
+                "scan_loss_tnd",
+                "missed_units",
+                "daily_loss_tnd",
+                "daily_missed_units",
             ])
         print("  Created {}".format(RESULTS_CSV))
 
 
 def log_result(metrics: dict, filename: str,
-               debug_filename: str) -> tuple[str, str]:
+               debug_filename: str,
+               scan_loss: float = 0.0,
+               missed_units: float = 0.0,
+               daily_loss: float = 0.0,
+               daily_missed_units: float = 0.0) -> tuple[str, str]:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status    = "CRITICAL" if metrics["alert"] else "OK"
 
@@ -95,6 +112,10 @@ def log_result(metrics: dict, filename: str,
             metrics["empty_pct"],
             status,
             debug_filename,
+            round(scan_loss, 4),
+            round(missed_units, 2),
+            round(daily_loss, 4),
+            round(daily_missed_units, 2),
         ])
 
     return timestamp, status
@@ -142,12 +163,24 @@ def process_image(img_path: Path) -> None:
         else:
             debug_name = "none"
 
-        timestamp, status = log_result(metrics, img_path.name, debug_name)
+        empty_rate    = (100.0 - metrics["stock_pct"]) / 100.0
+        missed_units  = SALES_PER_HOUR * SCAN_INTERVAL_HOURS * empty_rate
+        scan_loss     = missed_units * UNIT_PRICE
+        global daily_loss, daily_missed_units
+        daily_loss         += scan_loss
+        daily_missed_units += missed_units
+
+        timestamp, status = log_result(metrics, img_path.name, debug_name,
+                                        scan_loss, missed_units,
+                                        daily_loss, daily_missed_units)
 
         print("  Done")
         print("  Stock    : {}%".format(metrics['stock_pct']))
         print("  Status   : {}".format(status))
         print("  Logged   -> {}".format(RESULTS_CSV))
+        print("  Scan loss: {:.4f} TND  |  Missed units: {:.2f}  |  " \
+              "Daily loss: {:.4f} TND  |  Daily missed: {:.2f}".format(
+            scan_loss, missed_units, daily_loss, daily_missed_units))
 
         if metrics["alert"]:
             handle_alert(metrics, img_path.name, timestamp, debug_dst_path)
