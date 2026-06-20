@@ -72,30 +72,41 @@ SCAN_INTERVAL = 5
 
 FILE_SETTLE_TIME = 2
 
+EXPECTED_HEADER = [
+    "timestamp",
+    "filename",
+    "stock_pct",
+    "empty_pct",
+    "status",
+    "debug_file",
+    "scan_loss_tnd",
+    "missed_units",
+    "daily_loss_tnd",
+    "daily_missed_units",
+    "projected_loss_tnd",
+    "recoverable_tnd",
+]
+
 
 def setup() -> None:
     INCOMING_DIR.mkdir(exist_ok=True)
     ARCHIVE_PHOTOS.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DEBUG.mkdir(parents=True, exist_ok=True)
 
-    if not RESULTS_CSV.exists():
+    needs_header = not RESULTS_CSV.exists()
+    if not needs_header:
+        with open(RESULTS_CSV, "r") as f:
+            first = f.readline().strip().split(",")
+            if first != EXPECTED_HEADER:
+                needs_header = True
+
+    if needs_header:
+        existed = RESULTS_CSV.exists()
         with open(RESULTS_CSV, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([
-                "timestamp",
-                "filename",
-                "stock_pct",
-                "empty_pct",
-                "status",
-                "debug_file",
-                "scan_loss_tnd",
-                "missed_units",
-                "daily_loss_tnd",
-                "daily_missed_units",
-                "projected_loss_tnd",
-                "recoverable_tnd",
-            ])
-        print("  Created {}".format(RESULTS_CSV))
+            writer.writerow(EXPECTED_HEADER)
+        msg = "  Upgraded" if existed else "  Created"
+        print("{} {}".format(msg, RESULTS_CSV))
 
 
 def log_result(metrics: dict, filename: str,
