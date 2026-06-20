@@ -52,6 +52,8 @@ import alerts
 SALES_PER_HOUR = 20
 UNIT_PRICE = 0.5
 SCAN_INTERVAL_HOURS = 0.25
+STORE_OPEN   = 8
+STORE_CLOSE  = 22
 
 daily_loss         = 0.0
 daily_missed_units = 0.0
@@ -170,6 +172,16 @@ def process_image(img_path: Path) -> None:
         daily_loss         += scan_loss
         daily_missed_units += missed_units
 
+        now_hour     = datetime.now().hour + datetime.now().minute / 60.0
+        hours_elapsed = now_hour - STORE_OPEN
+        if hours_elapsed > 0:
+            projected_loss = round(
+                daily_loss * (STORE_CLOSE - STORE_OPEN) / hours_elapsed, 4)
+            recoverable    = round(projected_loss - daily_loss, 4)
+        else:
+            projected_loss = 0.0
+            recoverable    = 0.0
+
         timestamp, status = log_result(metrics, img_path.name, debug_name,
                                         scan_loss, missed_units,
                                         daily_loss, daily_missed_units)
@@ -178,9 +190,11 @@ def process_image(img_path: Path) -> None:
         print("  Stock    : {}%".format(metrics['stock_pct']))
         print("  Status   : {}".format(status))
         print("  Logged   -> {}".format(RESULTS_CSV))
-        print("  Scan loss: {:.4f} TND  |  Missed units: {:.2f}  |  " \
-              "Daily loss: {:.4f} TND  |  Daily missed: {:.2f}".format(
-            scan_loss, missed_units, daily_loss, daily_missed_units))
+        print("  Scan loss: {:.4f} TND  |  Missed: {:.2f}  |  " \
+              "Daily: {:.4f} TND / {:.2f}  |  " \
+              "Projected: {:.4f} TND  |  Recoverable: {:.4f} TND".format(
+            scan_loss, missed_units, daily_loss, daily_missed_units,
+            projected_loss, recoverable))
 
         if metrics["alert"]:
             handle_alert(metrics, img_path.name, timestamp, debug_dst_path)
