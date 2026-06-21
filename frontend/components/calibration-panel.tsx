@@ -1,50 +1,52 @@
 "use client"
 
-import { useState } from "react"
 import { Card } from "@/components/ui/card"
-import { cn } from "@/lib/utils"
-import { SlidersHorizontal, Crop, Palette, Layers } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { ShelfConfig } from "@/lib/inventory"
+import { SlidersHorizontal, Crop, Palette, Layers, Lock } from "lucide-react"
 
-type RangeRow = { label: string; key: string; value: number; min: number; max: number; unit?: string }
-
-function Slider({ row, onChange }: { row: RangeRow; onChange: (v: number) => void }) {
-  const pct = ((row.value - row.min) / (row.max - row.min)) * 100
+function FieldRow({ label, value }: { label: string; value: string | number | null }) {
   return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <label className="text-xs text-muted-foreground">{row.label}</label>
-        <span className="font-mono text-xs tabular-nums text-foreground">
-          {row.value}
-          {row.unit ?? ""}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={row.min}
-        max={row.max}
-        value={row.value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full outline-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow"
-        style={{
-          background: `linear-gradient(to right, var(--primary) ${pct}%, var(--muted) ${pct}%)`,
-        }}
-      />
+    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="font-mono text-xs tabular-nums text-foreground">
+        {value !== null && value !== undefined ? String(value) : "--"}
+      </span>
     </div>
   )
 }
 
-export function CalibrationPanel() {
-  const [roi, setRoi] = useState({ x: 320, y: 140, w: 1280, h: 720 })
-  const [hsv, setHsv] = useState({
-    hLow: 95,
-    hHigh: 130,
-    sLow: 25,
-    sHigh: 95,
-    vLow: 60,
-    vHigh: 200,
-  })
-  const [kernel, setKernel] = useState(5)
-  const [iterations, setIterations] = useState(2)
+function HsvBlock({ title, lower, upper }: { title: string; lower: number[] | null; upper: number[] | null }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {(["H", "S", "V"] as const).map((ch, i) => (
+          <div key={ch} className="rounded border border-border bg-muted/30 px-2 py-1.5 text-center">
+            <div className="text-[10px] text-muted-foreground">{ch}</div>
+            <div className="font-mono text-xs tabular-nums text-foreground">
+              {lower?.[i] ?? "--"} - {upper?.[i] ?? "--"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function CalibrationPanel({ config }: { config: ShelfConfig | null }) {
+  if (!config) {
+    return (
+      <Card className="p-6">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <SlidersHorizontal className="size-4" />
+          Calibration data unavailable. Run <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">hsv_calibrator.py</code> first.
+        </div>
+      </Card>
+    )
+  }
+
+  const roi = config.roi ?? [0, 0, 0, 0]
 
   return (
     <Card className="p-6">
@@ -58,9 +60,10 @@ export function CalibrationPanel() {
             Inverse background masking parameters for the yogurt shelf ROI
           </p>
         </div>
-        <span className="rounded-full bg-muted px-2.5 py-1 font-mono text-xs text-muted-foreground">
-          Admin
-        </span>
+        <Badge variant="secondary" className="gap-1">
+          <Lock className="size-3" />
+          Read-only
+        </Badge>
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -71,19 +74,10 @@ export function CalibrationPanel() {
             Region of Interest
           </div>
           <div className="grid grid-cols-2 gap-2">
-            {(["x", "y", "w", "h"] as const).map((k) => (
-              <div key={k} className="rounded-lg border border-border bg-muted/30 p-2">
-                <div className="text-[11px] uppercase text-muted-foreground">
-                  {k === "w" ? "width" : k === "h" ? "height" : k}
-                </div>
-                <input
-                  type="number"
-                  value={roi[k]}
-                  onChange={(e) => setRoi({ ...roi, [k]: Number(e.target.value) })}
-                  className="w-full bg-transparent font-mono text-sm text-foreground outline-none"
-                />
-              </div>
-            ))}
+            <FieldRow label="X" value={roi[0]} />
+            <FieldRow label="Y" value={roi[1]} />
+            <FieldRow label="Width" value={roi[2]} />
+            <FieldRow label="Height" value={roi[3]} />
           </div>
           <div className="rounded-lg border border-dashed border-border p-3">
             <div className="relative aspect-video w-full overflow-hidden rounded bg-muted/40">
@@ -95,72 +89,54 @@ export function CalibrationPanel() {
               </div>
             </div>
             <p className="mt-2 font-mono text-[11px] text-muted-foreground">
-              bbox = [{roi.x}, {roi.y}, {roi.w}, {roi.h}]
+              bbox = [{roi[0]}, {roi[1]}, {roi[2]}, {roi[3]}]
             </p>
           </div>
+          {config.image_size && (
+            <p className="text-[11px] text-muted-foreground">
+              Source image: {config.image_size[0]}x{config.image_size[1]}
+            </p>
+          )}
         </div>
 
-        {/* HSV */}
+        {/* HSV ranges */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Palette className="size-4 text-muted-foreground" />
-            HSV Shelf Color Range
+            HSV Color Ranges
           </div>
-          <div className="space-y-2.5">
-            <Slider row={{ label: "Hue Low", key: "hLow", value: hsv.hLow, min: 0, max: 179 }} onChange={(v) => setHsv({ ...hsv, hLow: v })} />
-            <Slider row={{ label: "Hue High", key: "hHigh", value: hsv.hHigh, min: 0, max: 179 }} onChange={(v) => setHsv({ ...hsv, hHigh: v })} />
-            <Slider row={{ label: "Sat Low", key: "sLow", value: hsv.sLow, min: 0, max: 255 }} onChange={(v) => setHsv({ ...hsv, sLow: v })} />
-            <Slider row={{ label: "Sat High", key: "sHigh", value: hsv.sHigh, min: 0, max: 255 }} onChange={(v) => setHsv({ ...hsv, sHigh: v })} />
-            <Slider row={{ label: "Val Low", key: "vLow", value: hsv.vLow, min: 0, max: 255 }} onChange={(v) => setHsv({ ...hsv, vLow: v })} />
-            <Slider row={{ label: "Val High", key: "vHigh", value: hsv.vHigh, min: 0, max: 255 }} onChange={(v) => setHsv({ ...hsv, vHigh: v })} />
-          </div>
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 p-2">
-            <span className="text-[11px] text-muted-foreground">Preview</span>
-            <span
-              className="h-5 flex-1 rounded"
-              style={{ background: `hsl(${(hsv.hLow + hsv.hHigh) * 1.0}, 45%, 55%)` }}
-            />
-          </div>
+          <HsvBlock title="Shelf Dark (BG)" lower={config.shelf_dark_lower} upper={config.shelf_dark_upper} />
+          <HsvBlock title="Shelf Light (BG)" lower={config.shelf_light_lower} upper={config.shelf_light_upper} />
+          <HsvBlock title="Yogurt (Product)" lower={config.yogurt_lower} upper={config.yogurt_upper} />
+          {config.ignore_lower && config.ignore_upper && (
+            <HsvBlock title="Ignore Tag" lower={config.ignore_lower} upper={config.ignore_upper} />
+          )}
         </div>
 
-        {/* Morphology */}
+        {/* Morphology + Config */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Layers className="size-4 text-muted-foreground" />
-            Morphological Cleanup
+            Morphology & Config
           </div>
-          <Slider
-            row={{ label: "Kernel Size", key: "kernel", value: kernel, min: 1, max: 15, unit: "px" }}
-            onChange={setKernel}
-          />
-          <Slider
-            row={{ label: "Iterations", key: "iter", value: iterations, min: 1, max: 8 }}
-            onChange={setIterations}
-          />
-          <div className="grid grid-cols-3 gap-1.5">
-            {Array.from({ length: 9 }).map((_, i) => {
-              const k = Math.max(1, Math.min(2, kernel))
-              const active = i === 4 || (kernel > 3 && [1, 3, 5, 7].includes(i)) || (kernel > 9 && true)
-              return (
-                <div
-                  key={i}
-                  className={cn(
-                    "aspect-square rounded-sm border border-border transition-colors",
-                    active ? "bg-primary/70" : "bg-muted/40",
-                  )}
-                />
-              )
-            })}
+          <FieldRow label="Kernel Size" value={`${config.morph_kernel}x${config.morph_kernel} px`} />
+          <FieldRow label="Alert Threshold" value={`${config.alert_threshold}%`} />
+          <FieldRow label="Exclude Regions" value={`${config.exclude_regions?.length ?? 0} rectangles`} />
+          <div className="space-y-2 pt-2">
+            <p className="text-xs font-medium text-muted-foreground">Financial Defaults</p>
+            <FieldRow label="Unit Price" value={`${config.unit_price} ${config.currency}`} />
+            <FieldRow label="Sales / Hour" value={config.sales_per_hour} />
+            <FieldRow label="Scan Interval" value={`${config.scan_interval_hours * 60} min`} />
+            <FieldRow label="Store Hours" value={`${config.store_open}:00 - ${config.store_close}:00`} />
           </div>
           <div className="rounded-lg border border-border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            <div>kernel = np.ones(({kernel},{kernel}))</div>
+            <div>kernel = np.ones(({config.morph_kernel},{config.morph_kernel}))</div>
             <div>cv2.morphologyEx(mask,</div>
-            <div className="pl-3">OPEN, kernel,</div>
-            <div className="pl-3">iterations={iterations})</div>
+            <div className="pl-3">OPEN, kernel)</div>
           </div>
-          <button className="w-full rounded-lg bg-primary py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90">
-            Apply &amp; Recalibrate
-          </button>
+          <p className="text-xs text-muted-foreground">
+            To change values, run <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">hsv_calibrator.py</code> and recalibrate.
+          </p>
         </div>
       </div>
     </Card>

@@ -1,122 +1,93 @@
 "use client"
 
 import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import type { AlertEvent } from "@/lib/inventory"
-import { Mail, MessageCircle, Send, BellRing } from "lucide-react"
+import { type AlertEvent, type ChannelStatus } from "@/lib/inventory"
+import { Bell, CheckCircle2, XCircle } from "lucide-react"
 
-type Channel = {
-  name: string
-  detail: string
-  icon: typeof Mail
-  status: "online" | "degraded"
-  latency: string
-}
-
-const CHANNELS: Channel[] = [
-  { name: "Telegram Bot API", detail: "@shelfsense_bot", icon: Send, status: "online", latency: "82ms" },
-  { name: "Gmail SMTP Server", detail: "smtp.gmail.com:587", icon: Mail, status: "online", latency: "210ms" },
-  { name: "WhatsApp Gateway", detail: "Cloud API v19.0", icon: MessageCircle, status: "degraded", latency: "640ms" },
-]
-
-const channelIcon: Record<string, typeof Mail> = {
-  Telegram: Send,
-  Gmail: Mail,
-  WhatsApp: MessageCircle,
-}
-
-export function AlertCenter({ alerts }: { alerts: AlertEvent[] }) {
+function ChannelPill({ ch }: { ch: ChannelStatus }) {
   return (
-    <Card className="flex flex-col p-6">
-      <div className="mb-4">
-        <h2 className="flex items-center gap-2 text-base font-semibold">
-          <BellRing className="size-4 text-primary" />
-          Multi-Channel Alerts
-        </h2>
-        <p className="text-sm text-muted-foreground">Integration health &amp; dispatched alarm log</p>
+    <div className="flex items-center justify-between rounded-lg border bg-card px-3 py-2.5">
+      <div className="flex items-center gap-2.5">
+        <span className={cn("size-2.5 rounded-full transition-colors", ch.enabled ? "bg-success" : "bg-muted-foreground/30")} />
+        <div>
+          <div className="text-sm font-medium leading-tight">{ch.name}</div>
+          <div className="text-xs text-muted-foreground">{ch.detail}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {ch.enabled ? (
+          <Badge variant="default" className="bg-success/15 text-success hover:bg-success/20 border-success/20">
+            <CheckCircle2 className="mr-1 size-3" /> Active
+          </Badge>
+        ) : (
+          <Badge variant="secondary" className="text-muted-foreground">
+            <XCircle className="mr-1 size-3" /> Off
+          </Badge>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function AlertCenter({
+  alerts,
+  channels,
+}: {
+  alerts: AlertEvent[]
+  channels: ChannelStatus[]
+}) {
+  return (
+    <Card className="flex flex-col p-0">
+      <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+        <Bell className="size-4 text-primary" />
+        <h2 className="text-sm font-semibold">Alert Center</h2>
+        {alerts.length > 0 && (
+          <Badge variant="destructive" className="ml-auto text-xs">
+            {alerts.length}
+          </Badge>
+        )}
       </div>
 
-      {/* Channel health */}
-      <div className="space-y-2">
-        {CHANNELS.map((c) => {
-          const Icon = c.icon
-          const online = c.status === "online"
-          return (
-            <div
-              key={c.name}
-              className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex size-8 items-center justify-center rounded-md bg-muted">
-                  <Icon className="size-4 text-foreground" />
-                </div>
-                <div>
-                  <div className="text-sm font-medium">{c.name}</div>
-                  <div className="font-mono text-xs text-muted-foreground">{c.detail}</div>
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-1">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium",
-                    online ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      online ? "bg-success" : "bg-warning animate-pulse",
-                    )}
-                  />
-                  {online ? "Online" : "Degraded"}
-                </span>
-                <span className="font-mono text-[11px] text-muted-foreground">{c.latency}</span>
-              </div>
-            </div>
-          )
-        })}
+      {/* Channel status */}
+      <div className="space-y-2 border-b border-border px-5 py-4">
+        <p className="text-xs font-medium text-muted-foreground mb-2">Channel Status</p>
+        {channels.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No channel config available.</p>
+        ) : (
+          channels.map((ch) => <ChannelPill key={ch.name} ch={ch} />)
+        )}
       </div>
 
-      {/* Audit log */}
-      <div className="mt-5 flex min-h-0 flex-1 flex-col">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Critical Alert Log
-          </span>
-          <span className="font-mono text-xs text-muted-foreground">{alerts.length} events</span>
-        </div>
-        <div className="-mr-2 flex-1 space-y-2 overflow-y-auto pr-2">
-          {alerts.length === 0 && (
-            <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-              No critical alarms dispatched today.
-            </p>
-          )}
-          {alerts.map((a) => (
-            <div key={a.id} className="rounded-lg border border-critical/20 bg-critical/5 px-3 py-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-xs font-medium text-critical">{a.time}</span>
-                <span className="rounded bg-critical/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-critical">
-                  {a.stock}%
-                </span>
+      {/* Alert log */}
+      <div className="px-5 py-4">
+        <p className="text-xs font-medium text-muted-foreground mb-2">Alert Log</p>
+        {alerts.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No alerts triggered yet.</p>
+        ) : (
+          <div className="space-y-2 max-h-[320px] overflow-y-auto">
+            {alerts.map((a) => (
+              <div
+                key={a.id}
+                className="rounded-lg border border-critical/20 bg-critical/5 px-3 py-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs text-muted-foreground">{a.time}</span>
+                  <span className="font-mono text-sm font-semibold text-critical">{a.stock}%</span>
+                </div>
+                <p className="mt-1 text-xs text-foreground leading-relaxed">{a.message}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {a.channels.map((c) => (
+                    <Badge key={c} variant="outline" className="text-xs border-critical/30 text-critical/80">
+                      {c}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-              <p className="mt-1 text-sm text-foreground">🚨 {a.message}</p>
-              <div className="mt-1.5 flex items-center gap-1.5">
-                {a.channels.map((ch) => {
-                  const Icon = channelIcon[ch]
-                  return (
-                    <span
-                      key={ch}
-                      className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                    >
-                      <Icon className="size-3" />
-                      {ch}
-                    </span>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   )
