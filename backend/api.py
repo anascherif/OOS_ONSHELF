@@ -79,6 +79,16 @@ def _valid_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _today_rows(rows: list[dict]) -> list[dict]:
+    today = datetime.now().strftime("%Y-%m-%d")
+    out = []
+    for r in rows:
+        ts = (r.get("timestamp") or "").strip()
+        if ts.startswith(today):
+            out.append(r)
+    return out
+
+
 def _compute_roi_pixels(cfg: dict) -> int:
     roi = cfg.get("roi")
     if not roi or len(roi) != 4:
@@ -162,9 +172,10 @@ def latest_scan():
 def scan_history():
     rows, _ = _read_csv()
     valid = _valid_rows(rows)
+    today = _today_rows(valid)
     cfg = _load_json(SHELF_CONFIG) or {}
     roi_px = _compute_roi_pixels(cfg)
-    scans = [_row_to_scan(r, roi_px) for r in valid]
+    scans = [_row_to_scan(r, roi_px) for r in today]
     return jsonify(scans)
 
 
@@ -172,11 +183,12 @@ def scan_history():
 def alert_log():
     rows, _ = _read_csv()
     valid = _valid_rows(rows)
+    today = _today_rows(valid)
     alert_cfg = _load_json(ALERT_CONFIG)
     channels = _get_enabled_channels(alert_cfg)
 
     alerts = []
-    for r in valid:
+    for r in today:
         if (r.get("status") or "").upper() != "CRITICAL":
             continue
         stock = float(r.get("stock_pct", 0))
