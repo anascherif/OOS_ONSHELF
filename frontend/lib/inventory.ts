@@ -1,54 +1,19 @@
 export type StockState = "stocked" | "warning" | "critical"
 
-export const ROI_TOTAL_PIXELS = 921_600 // 1280 x 720 ROI bounding box area
-
-/** Retail Opportunity Recovery model constants */
-export const CURRENCY = "TND"
-/** average sale price of one unit on this shelf */
-export const UNIT_PRICE = 3.2
-/** units a fully-stocked shelf would sell during one 15-min interval at peak */
-export const BASE_DEMAND_PER_INTERVAL = 1.7
-
 export type Scan = {
-  /** minutes since midnight for the scan */
   time: string
-  timestamp: Date
-  /** remaining stock percentage 0-100 */
+  timestamp: string
   stock: number
-  /** exposed empty-shelf background pixels */
   exposedPixels: number
-  /** estimated product pixels */
   productPixels: number
-  /** estimated units that could not be sold during this interval */
   missedUnits: number
-  /** revenue lost during this interval (TND) */
   lostRevenue: number
-}
-
-/**
- * Translates an empty-shelf fraction into lost sales for a single 15-min
- * interval. Demand peaks during the 17:00-19:00 rush, and the share of
- * shoppers who walk away grows with how empty the shelf looks.
- */
-export function computeScanLoss(stock: number, hour: number): { missedUnits: number; lostRevenue: number } {
-  const emptyFraction = (100 - stock) / 100
-  const rushMultiplier = hour >= 17 && hour <= 19 ? 1.8 : 1
-  const missedUnits = BASE_DEMAND_PER_INTERVAL * emptyFraction * rushMultiplier
-  return { missedUnits, lostRevenue: missedUnits * UNIT_PRICE }
-}
-
-export function sumFinancials(scans: Scan[]): { missedUnits: number; lostRevenue: number } {
-  return scans.reduce(
-    (acc, s) => ({
-      missedUnits: acc.missedUnits + s.missedUnits,
-      lostRevenue: acc.lostRevenue + s.lostRevenue,
-    }),
-    { missedUnits: 0, lostRevenue: 0 },
-  )
-}
-
-export function formatMoney(n: number): string {
-  return `${n.toFixed(2)} ${CURRENCY}`
+  filename?: string
+  status?: string
+  dailyLossTnd?: number
+  dailyMissedUnits?: number
+  projectedLossTnd?: number
+  recoverableTnd?: number
 }
 
 export type AlertEvent = {
@@ -57,6 +22,69 @@ export type AlertEvent = {
   stock: number
   channels: ("Telegram" | "Gmail" | "WhatsApp")[]
   message: string
+}
+
+export type ChannelStatus = {
+  name: string
+  detail: string
+  enabled: boolean
+  last_sent: string | null
+}
+
+export type ShelfConfig = {
+  roi: number[]
+  shelf_dark_lower: number[] | null
+  shelf_dark_upper: number[] | null
+  shelf_light_lower: number[] | null
+  shelf_light_upper: number[] | null
+  yogurt_lower: number[] | null
+  yogurt_upper: number[] | null
+  ignore_lower: number[] | null
+  ignore_upper: number[] | null
+  exclude_regions: number[][]
+  morph_kernel: number
+  alert_threshold: number
+  unit_price: number
+  currency: string
+  sales_per_hour: number
+  scan_interval_hours: number
+  store_open: number
+  store_close: number
+  roi_total_pixels: number
+  calibrated_on: string
+  image_size: number[]
+}
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || ""
+
+export async function fetchLatestScan(): Promise<Scan | null> {
+  const res = await fetch(`${API_BASE}/api/latest-scan`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function fetchScanHistory(): Promise<Scan[]> {
+  const res = await fetch(`${API_BASE}/api/scan-history`)
+  if (!res.ok) return []
+  return res.json()
+}
+
+export async function fetchAlertLog(): Promise<AlertEvent[]> {
+  const res = await fetch(`${API_BASE}/api/alert-log`)
+  if (!res.ok) return []
+  return res.json()
+}
+
+export async function fetchConfig(): Promise<ShelfConfig | null> {
+  const res = await fetch(`${API_BASE}/api/config`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function fetchChannelStatus(): Promise<ChannelStatus[]> {
+  const res = await fetch(`${API_BASE}/api/channel-status`)
+  if (!res.ok) return []
+  return res.json()
 }
 
 export function getStockState(stock: number): StockState {
@@ -92,70 +120,22 @@ export const STATE_META: Record<
   },
 }
 
-/**
- * Simulates a full day of 15-minute scans where shoppers gradually
- * deplete the yogurt shelf, with an occasional restock bump.
- */
-export function generateDaySchedule(): Scan[] {
-  // deterministic seeded PRNG so SSR and client render identical data
-  let seed = 1337
-  const rand = () => {
-    seed = (seed * 1664525 + 1013904223) % 4294967296
-    return seed / 4294967296
-  }
-
-  const scans: Scan[] = []
-  const start = new Date()
-  start.setHours(8, 0, 0, 0)
-
-  let stock = 100
-  // 8:00 -> ~20:00 => 48 scans (15 min each)
-  for (let i = 0; i < 49; i++) {
-    const ts = new Date(start.getTime() + i * 15 * 60 * 1000)
-    // restock event mid-afternoon
-    if (i === 30) stock = Math.min(100, stock + 55)
-    else {
-      const drop = 1.4 + rand() * 3.6
-      const rushHour = ts.getHours() >= 17 && ts.getHours() <= 19 ? 2.2 : 1
-      stock = Math.max(6, stock - drop * rushHour)
-    }
-    const rounded = Math.round(stock)
-    const productPixels = Math.round((rounded / 100) * ROI_TOTAL_PIXELS)
-    const { missedUnits, lostRevenue } = computeScanLoss(rounded, ts.getHours())
-    scans.push({
-      time: ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
-      timestamp: ts,
-      stock: rounded,
-      productPixels,
-      exposedPixels: ROI_TOTAL_PIXELS - productPixels,
-      missedUnits,
-      lostRevenue,
-    })
-  }
-  return scans
-}
-
-export function buildAlertLog(scans: Scan[]): AlertEvent[] {
-  const alerts: AlertEvent[] = []
-  let prevCritical = false
-  for (const s of scans) {
-    const isCritical = s.stock < 30
-    if (isCritical && !prevCritical) {
-      alerts.push({
-        id: `${s.time}-${s.stock}`,
-        time: s.time,
-        stock: s.stock,
-        channels: s.stock < 20 ? ["Telegram", "Gmail", "WhatsApp"] : ["Telegram", "Gmail"],
-        message: `Critical Stock Alert (${s.stock}%) dispatched`,
-      })
-    }
-    prevCritical = isCritical
-  }
-  return alerts.reverse()
+export function formatMoney(n: number, currency = "TND"): string {
+  return `${n.toFixed(2)} ${currency}`
 }
 
 export function formatPixels(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return `${n}`
+}
+
+export function sumFinancials(scans: Scan[]): { missedUnits: number; lostRevenue: number } {
+  return scans.reduce(
+    (acc, s) => ({
+      missedUnits: acc.missedUnits + s.missedUnits,
+      lostRevenue: acc.lostRevenue + s.lostRevenue,
+    }),
+    { missedUnits: 0, lostRevenue: 0 },
+  )
 }
