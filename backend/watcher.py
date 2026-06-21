@@ -1,6 +1,6 @@
 """
 ========================================================================
-  WATCHER - Automatic shelf monitoring engine
+  SHELFSENSE WATCHER - Automatic shelf monitoring engine
   Usage : python watcher.py
   Reads : shelf_config.json  (written by hsv_calibrator.py)
 
@@ -18,11 +18,13 @@
 
   FOLDER STRUCTURE (auto-created on first run)
   ---------------------------------------------
-  option 3/
+  backend/
   |-- hsv_calibrator.py
   |-- shelf_monitor.py
   |-- watcher.py
   |-- alerts.py
+  |-- api.py
+  |-- requirements.txt
   |-- shelf_config.json       <- written by calibrator
   |-- results.csv             <- one row per photo, auto-created
   |-- incoming/               <- camera drops photos here
@@ -48,16 +50,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shelf_monitor as monitor
 import alerts
 
-# --- Mock financial constants for Opportunity Cost POC ---
-SALES_PER_HOUR = 20
-UNIT_PRICE = 0.5
-SCAN_INTERVAL_HOURS = 0.25
-STORE_OPEN   = 8
-STORE_CLOSE  = 22
+_FINANCIAL_DEFAULTS = {
+    "unit_price": 0.5,
+    "currency": "TND",
+    "sales_per_hour": 20,
+    "scan_interval_hours": 0.25,
+    "store_open": 8,
+    "store_close": 22,
+}
 
 daily_loss         = 0.0
 daily_missed_units = 0.0
-# ---------------------------------------------------------
+
+
+def _get_financial() -> dict:
+    cfg = monitor._get_cfg()
+    return {k: cfg.get(k, v) for k, v in _FINANCIAL_DEFAULTS.items()}
 
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
@@ -182,18 +190,19 @@ def process_image(img_path: Path) -> None:
         else:
             debug_name = "none"
 
+        fin = _get_financial()
         empty_rate    = (100.0 - metrics["stock_pct"]) / 100.0
-        missed_units  = SALES_PER_HOUR * SCAN_INTERVAL_HOURS * empty_rate
-        scan_loss     = missed_units * UNIT_PRICE
+        missed_units  = fin["sales_per_hour"] * fin["scan_interval_hours"] * empty_rate
+        scan_loss     = missed_units * fin["unit_price"]
         global daily_loss, daily_missed_units
         daily_loss         += scan_loss
         daily_missed_units += missed_units
 
         now_hour     = datetime.now().hour + datetime.now().minute / 60.0
-        hours_elapsed = now_hour - STORE_OPEN
+        hours_elapsed = now_hour - fin["store_open"]
         if hours_elapsed > 0:
             projected_loss = round(
-                daily_loss * (STORE_CLOSE - STORE_OPEN) / hours_elapsed, 4)
+                daily_loss * (fin["store_close"] - fin["store_open"]) / hours_elapsed, 4)
             recoverable    = round(projected_loss - daily_loss, 4)
         else:
             projected_loss = 0.0
@@ -247,7 +256,7 @@ def watch() -> None:
 
     print()
     print("=" * 50)
-    print("  SHELF WATCHER - Running")
+    print("  SHELFSENSE WATCHER - Running")
     print("=" * 50)
     print("  Watching   : {}".format(INCOMING_DIR.resolve()))
     print("  Results    : {}".format(RESULTS_CSV.resolve()))
