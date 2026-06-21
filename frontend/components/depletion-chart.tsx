@@ -2,7 +2,7 @@
 
 import { Card } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart"
-import { CURRENCY, type Scan } from "@/lib/inventory"
+import { formatMoney, type Scan, type ShelfConfig } from "@/lib/inventory"
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts"
 import { TrendingDown } from "lucide-react"
 
@@ -10,7 +10,7 @@ const chartConfig = {
   stock: { label: "Stock Level", color: "var(--chart-1)" },
 } satisfies ChartConfig
 
-function CustomTooltip({ active, payload }: any) {
+function CustomTooltip({ active, payload, currency }: any) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload as Scan
   return (
@@ -19,13 +19,21 @@ function CustomTooltip({ active, payload }: any) {
       <div className="mt-1 font-mono text-sm font-semibold text-foreground">{d.stock}% remaining</div>
       <div className="text-muted-foreground">{d.exposedPixels.toLocaleString()}px exposed</div>
       <div className="mt-1 flex items-center gap-1 border-t border-border pt-1 font-mono text-critical">
-        - {d.lostRevenue.toFixed(2)} {CURRENCY} lost
+        - {d.lostRevenue.toFixed(2)} {currency} lost
       </div>
     </div>
   )
 }
 
-export function DepletionChart({ scans }: { scans: Scan[] }) {
+export function DepletionChart({
+  scans,
+  alertThreshold,
+}: {
+  scans: Scan[]
+  alertThreshold?: number
+}) {
+  const threshold = alertThreshold ?? 30
+
   return (
     <Card className="p-6">
       <div className="mb-4 flex items-start justify-between">
@@ -34,7 +42,9 @@ export function DepletionChart({ scans }: { scans: Scan[] }) {
             <TrendingDown className="size-4 text-primary" />
             Historical Depletion
           </h2>
-          <p className="text-sm text-muted-foreground">Chronological stock level across today&apos;s 15-min scans</p>
+          <p className="text-sm text-muted-foreground">
+            Chronological stock level from scan history
+          </p>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
@@ -71,9 +81,9 @@ export function DepletionChart({ scans }: { scans: Scan[] }) {
             tickFormatter={(v) => `${v}%`}
             className="text-xs"
           />
-          <ChartTooltip content={<CustomTooltip />} />
+          <ChartTooltip content={<CustomTooltip currency="TND" />} />
           <ReferenceLine
-            y={30}
+            y={threshold}
             stroke="var(--critical)"
             strokeDasharray="4 4"
             strokeWidth={1.5}

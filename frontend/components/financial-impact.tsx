@@ -2,16 +2,30 @@
 
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { CURRENCY, UNIT_PRICE, formatMoney, sumFinancials, type Scan } from "@/lib/inventory"
+import { formatMoney, sumFinancials, type Scan, type ShelfConfig } from "@/lib/inventory"
 import { TrendingDown, PackageX, CircleDollarSign, ArrowDownRight } from "lucide-react"
 
-export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan }) {
+export function FinancialImpact({
+  scans,
+  latest,
+  config,
+}: {
+  scans: Scan[]
+  latest: Scan
+  config: ShelfConfig | null
+}) {
+  const currency = config?.currency ?? "TND"
+  const unitPrice = config?.unit_price ?? 0.5
   const { missedUnits, lostRevenue } = sumFinancials(scans)
   const intervalLoss = latest.lostRevenue
   const intervalUnits = latest.missedUnits
-  // projected end-of-day loss if the current interval's rate held for the rest of the day
-  const remainingIntervals = Math.max(0, 48 - scans.length)
-  const projectedLoss = lostRevenue + intervalLoss * remainingIntervals
+  const dailyLoss = latest.dailyLossTnd ?? lostRevenue
+  const dailyMissed = latest.dailyMissedUnits ?? missedUnits
+  const projectedLoss = latest.projectedLossTnd ?? 0
+  const recoverable = latest.recoverableTnd ?? 0
+  const remainingIntervals = config
+    ? Math.max(0, Math.round((config.store_close - config.store_open) / config.scan_interval_hours) - scans.length)
+    : 0
 
   return (
     <Card className="overflow-hidden border-critical/25 bg-gradient-to-br from-critical/[0.07] to-transparent p-0">
@@ -32,7 +46,7 @@ export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan
       </div>
 
       <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        {/* Daily lost revenue — hero metric */}
+        {/* Daily lost revenue */}
         <div className="flex flex-col justify-between gap-3 p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <CircleDollarSign className="size-4" />
@@ -41,13 +55,13 @@ export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan
           <div>
             <div className="flex items-baseline gap-1.5">
               <span className="font-mono text-3xl font-semibold tabular-nums text-critical">
-                {lostRevenue.toFixed(2)}
+                {dailyLoss.toFixed(2)}
               </span>
-              <span className="text-sm font-medium text-critical/80">{CURRENCY}</span>
+              <span className="text-sm font-medium text-critical/80">{currency}</span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {"Left on the table today · ~"}
-              {formatMoney(projectedLoss)} projected by close
+              Left on the table today |
+              {projectedLoss > 0 ? ` ~${formatMoney(projectedLoss, currency)} projected by close` : " no projection yet"}
             </p>
           </div>
         </div>
@@ -61,18 +75,17 @@ export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan
           <div>
             <div className="flex items-baseline gap-1.5">
               <span className="font-mono text-3xl font-semibold tabular-nums text-foreground">
-                {Math.round(missedUnits)}
+                {Math.round(dailyMissed)}
               </span>
               <span className="text-sm font-medium text-muted-foreground">units</span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {"Products shoppers couldn't buy · "}
-              {formatMoney(UNIT_PRICE)}/unit
+              Products shoppers could not buy | {formatMoney(unitPrice, currency)}/unit
             </p>
           </div>
         </div>
 
-        {/* Current scan loss — micro metric */}
+        {/* Current scan loss */}
         <div className="flex flex-col justify-between gap-3 p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <ArrowDownRight className="size-4" />
@@ -86,11 +99,10 @@ export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan
               )}
             >
               <span className="font-mono text-3xl font-semibold tabular-nums">- {intervalLoss.toFixed(2)}</span>
-              <span className="text-sm font-medium opacity-80">{CURRENCY}</span>
+              <span className="text-sm font-medium opacity-80">{currency}</span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {"This 15-min interval · "}
-              {intervalUnits.toFixed(1)} units missed
+              This scan interval | {intervalUnits.toFixed(1)} units missed
             </p>
           </div>
         </div>
@@ -100,8 +112,10 @@ export function FinancialImpact({ scans, latest }: { scans: Scan[]; latest: Scan
         <p className="text-xs leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">Action:</span> Every minute this shelf stays empty during
           peak hours compounds the loss. Restocking now recovers an estimated{" "}
-          <span className="font-medium text-primary">{formatMoney(intervalLoss * remainingIntervals)}</span> before
-          store close.
+          <span className="font-medium text-primary">
+            {formatMoney(recoverable > 0 ? recoverable : intervalLoss * remainingIntervals, currency)}
+          </span>{" "}
+          before store close.
         </p>
       </div>
     </Card>
