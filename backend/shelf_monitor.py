@@ -128,16 +128,22 @@ def build_shelf_mask(bgr_crop: np.ndarray,
     return cleaned, ignore_mask
 
 
-def build_exclude_mask(crop_shape: tuple, exclude_regions: list) -> np.ndarray | None:
+def build_exclude_mask(crop_shape: tuple, exclude_regions: list,
+                        scaled_roi: tuple) -> np.ndarray | None:
     if not exclude_regions:
         return None
     h, w = crop_shape[:2]
+    ref_h = scaled_roi[1] - scaled_roi[0]
+    ref_w = scaled_roi[3] - scaled_roi[2]
+    if ref_h < 1 or ref_w < 1:
+        ref_h = h
+        ref_w = w
     mask = np.zeros((h, w), dtype=np.uint8)
     for ey1, ey2, ex1, ex2 in exclude_regions:
-        sy1 = max(0, min(int(ey1), h - 1))
-        sy2 = max(0, min(int(ey2), h))
-        sx1 = max(0, min(int(ex1), w - 1))
-        sx2 = max(0, min(int(ex2), w))
+        sy1 = max(0, min(int(ey1 * h / ref_h), h - 1))
+        sy2 = max(0, min(int(ey2 * h / ref_h), h))
+        sx1 = max(0, min(int(ex1 * w / ref_w), w - 1))
+        sx2 = max(0, min(int(ex2 * w / ref_w), w))
         if sy2 > sy1 and sx2 > sx1:
             mask[sy1:sy2, sx1:sx2] = 255
     return mask
@@ -206,7 +212,8 @@ def analyze(image_path: str, save_debug_img: bool = True) -> dict:
     mask, ignore_hsv = build_shelf_mask(crop, params)
 
     exclude_mask = build_exclude_mask(
-        crop.shape, params.get("exclude_regions", []))
+        crop.shape, params.get("exclude_regions", []),
+        scaled_roi)
 
     ignore_mask = ignore_hsv
     if exclude_mask is not None:
