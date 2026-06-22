@@ -1,26 +1,36 @@
 # ShelfSense
 
-Real-time computer-vision shelf monitoring with HSV calibration, automatic photo ingestion, multi-channel alerts, and a live dashboard.
+Real-time computer vision shelf monitoring for retail operations. Automatically detects stock depletion from store camera photos, computes financial impact, and dispatches alerts via Gmail, Telegram, and WhatsApp.
+
+## Overview
+
+ShelfSense replaces manual shelf checks with an automated pipeline: a shop assistant snaps a photo, drops it into the incoming folder, and the system processes it against a calibrated mask to compute fill rate, missed sales, and projected loss. A live web dashboard provides at-a-glance KPIs, depletion trends, and alert history.
 
 ## Architecture
 
 ```
 backend/                          frontend/
-  hsv_calibrator.py  (setup)       app/page.tsx
-  shelf_monitor.py   (core CV)     components/
-  watcher.py         (auto-loop)     kpi-board.tsx
-  alerts.py          (Gmail/TG/WA)   financial-impact.tsx
-  api.py             (Flask API)     depletion-chart.tsx
-  requirements.txt                   alert-center.tsx
-  alert_config.example.json         calibration-panel.tsx
-  incoming/           <- photos     lib/inventory.ts
-  archive/                            next.config.mjs
-    photos/  debug/
+  hsv_calibrator.py  (setup)       app/           pages + layout
+  shelf_monitor.py   (core CV)     components/    dashboard widgets
+  watcher.py         (auto-loop)   lib/           API client + types
+  alerts.py          (dispatch)    public/         assets
+  api.py             (Flask API)
+  archive/                         next.config.mjs
+    photos/  debug/               package.json
+  incoming/        <- drop photos here
+  results.csv      <- scan log
+  shelf_config.json               tsconfig.json
+  requirements.txt
 ```
 
-## Quick Start
+## Prerequisites
 
-### 1. Calibrate (run once)
+- Python 3.10+
+- Node.js 20+
+
+## Setup
+
+### 1. Calibrate (run once per shelf)
 
 ```bash
 cd backend
@@ -28,71 +38,111 @@ pip install -r requirements.txt
 python hsv_calibrator.py reference_photo.jpg
 ```
 
-Draw the shelf crop box, click shelf colors (D/L), yogurt colors (Y), then press S. This writes `shelf_config.json`.
+Draw a crop box around the shelf, sample dark (D) and light (L) background colours, and optionally exclude product colours (Y) or price tags (I). Press S to save `shelf_config.json`.
 
 ### 2. Configure alerts (optional)
 
 ```bash
 cp alert_config.example.json alert_config.json
-# Edit alert_config.json with your credentials
 ```
 
-### 3. Run
+Edit `alert_config.json` with your Gmail app password, Telegram bot token, or WhatsApp gateway URL. Placeholder fields are documented in the example file.
+
+### 3. Start the watcher
 
 ```bash
-# Terminal 1 - backend watcher
 cd backend
 python watcher.py
+```
 
-# Terminal 2 - backend API
+The watcher polls `incoming/` for new images, runs `shelf_monitor.py` on each one, logs results to `results.csv`, archives originals and debug overlays, and triggers alerts when stock falls below the configured threshold.
+
+### 4. Start the API server
+
+```bash
 cd backend
 python api.py
+```
 
-# Terminal 3 - frontend dashboard
+Serves scan data and configuration to the dashboard on port 5001. CORS is enabled for all origins on `/api/*` routes.
+
+### 5. Start the dashboard
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. The dashboard polls the API every 15 s.
+Opens at `http://localhost:3000`. The dashboard polls the API every 15 seconds. All API calls use relative paths through a Next.js proxy rewrite — no hardcoded hostnames.
 
-### 4. Feed photos
+### 6. Feed photos
 
-Drop JPEG/PNG files into `backend/incoming/`. The watcher picks them up, runs the stock analysis, logs to `results.csv`, archives the original, and sends alerts if stock is below threshold.
+Drop JPEG or PNG files into `backend/incoming/`. The watcher picks up new files by snapshot-diff (not continuous polling), processes each one, and the dashboard reflects the latest scan within one poll cycle.
 
-## API Endpoints (port 5001)
+## API Reference
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/health` | Service health check |
-| `GET /api/latest-scan` | Most recent row from results.csv |
-| `GET /api/scan-history` | All valid rows from results.csv |
-| `GET /api/alert-log` | Critical alert events |
-| `GET /api/config` | shelf_config.json + financial defaults |
-| `GET /api/channel-status` | Alert channel enabled state + last sent |
+Base URL: `http://localhost:5001`
 
-## Financial Defaults
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Service health check |
+| GET | `/api/latest-scan` | Most recent scan from `results.csv` |
+| GET | `/api/scan-history` | All of today's valid scan rows |
+| GET | `/api/alert-log` | Critical alerts raised today |
+| GET | `/api/config` | `shelf_config.json` merged with financial defaults |
+| GET | `/api/channel-status` | Alert channel state and last-sent timestamp |
 
-Configurable in `shelf_config.json` (written by calibrator, with fallbacks):
+## Configuration
+
+### Financial defaults
+
+Written to `shelf_config.json` by the calibrator. Override any field without re-calibrating:
 
 | Key | Default | Description |
-|---|---|---|
-| `unit_price` | 0.5 | Price per unit (TND) |
-| `currency` | TND | Display currency |
-| `sales_per_hour` | 20 | Avg customer demand |
-| `scan_interval_hours` | 0.25 | Time between scans |
-| `store_open` | 8 | Store opening hour |
-| `store_close` | 22 | Store closing hour |
+|-----|---------|-------------|
+| `unit_price` | 0.5 | Price per unit in local currency |
+| `currency` | TND | Display currency code |
+| `sales_per_hour` | 20 | Average customer demand per hour |
+| `scan_interval_hours` | 0.25 | Expected interval between scans |
+| `store_open` | 8 | Store opening hour (24 h) |
+| `store_close` | 22 | Store closing hour (24 h) |
 
-## Excluded from Git
+### Alert channels
 
-- `shelf_config.json` - calibration data (regenerated by calibrator)
-- `alert_config.json` - real credentials (use `alert_config.example.json`)
-- `results.csv` - runtime scan log
-- `archive/photos/*`, `archive/debug/*` - processed images
-- `incoming/*` - photos dropped by camera
+| Channel | Protocol | Config file |
+|---------|----------|-------------|
+| Gmail | SMTP (smtp.gmail.com:587) | `alert_config.json` → `gmail` |
+| Telegram | Bot API | `alert_config.json` → `telegram` |
+| WhatsApp | HTTP gateway | `alert_config.json` → `whatsapp` |
 
-## Stack
+## Exclusion regions
 
-- **Backend**: Python, OpenCV, NumPy, Flask, flask-cors
-- **Frontend**: Next.js 16, React 19, Tailwind CSS 4, Recharts, shadcn/ui, Lucide icons
+Price tags, barcodes, and other non-product objects can be masked by drawing exclusion rectangles during calibration (Phase 3). Coordinates are stored in crop-relative pixels and scaled proportionally when the analysis runs on images of different resolutions.
+
+## Development
+
+- Backend scripts use `_SCRIPT_DIR` for all path lookups — they work from any working directory
+- `shelf_config.json` and `alert_config.json` contain site-specific data and are excluded from version control
+- Results are filtered to the current date by the API — the full history is preserved in `results.csv`
+- Financial constants are read from the config file at runtime; no hardcoded values in source code
+
+## Notes
+
+- The dashboard is read-only. Configuration changes must be made through the calibrator or by editing `shelf_config.json` directly.
+- Exclusion regions are the most calibration-sensitive parameter — verify placement on a test image after calibration.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Computer vision | Python, OpenCV, NumPy |
+| Backend API | Flask, flask-cors |
+| Frontend | Next.js 16, React 19 |
+| UI | Tailwind CSS 4, shadcn/ui, Lucide icons |
+| Charts | Recharts |
+| Alerts | smtplib (Gmail), python-telegram-bot, requests (WhatsApp) |
+
+## License
+
+MIT
