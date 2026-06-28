@@ -1,9 +1,15 @@
 """
-========================================================================
-  SHELF MONITOR - Run on any photo after calibration
-  Usage : python shelf_monitor.py <photo.jpg>
-  Reads : shelf_config.json  (written once by hsv_calibrator.py)
-========================================================================
+Core shelf analysis pipeline. This is what runs on every photo.
+
+Pipeline order:
+  1. load_and_crop()     - reads image, applies ROI, scales to current res
+  2. build_shelf_mask()  - HSV range masking + morphology cleanup
+  3. build_exclude_mask()- rectangles over price tags (optional)
+  4. calculate_stock()   - ratio of shelf pixels to total pixels
+  5. save_debug()        - overlay + annotated debug image
+
+Config is lazy-loaded once per process and cached. All paths are relative
+to the script directory so this works no matter what CWD is.
 """
 
 import cv2
@@ -19,6 +25,8 @@ _cfg = None
 
 
 def _get_cfg() -> dict:
+    """Lazy-load shelf_config.json. Cached in _cfg so subsequent calls
+    don't reread the file. Exits if no config exists."""
     global _cfg
     if _cfg is not None:
         return _cfg
@@ -32,6 +40,8 @@ def _get_cfg() -> dict:
 
 
 def _arr(key: str, cfg: dict | None = None) -> np.ndarray | None:
+    """Read a named HSV range from config and return as uint8 array.
+    Returns None if the key doesn't exist (not all ranges are required)."""
     if cfg is None:
         cfg = _get_cfg()
     v = cfg.get(key)
@@ -41,6 +51,9 @@ def _arr(key: str, cfg: dict | None = None) -> np.ndarray | None:
 
 
 def _load_params(cfg: dict | None = None) -> dict:
+    """Pack all config values into a flat dict with sensible defaults.
+    HSV values are stored as numpy arrays (OpenCV expects uint8).
+    ref_dims is the calibration image size, used to scale the ROI."""
     if cfg is None:
         cfg = _get_cfg()
     return {
@@ -62,6 +75,11 @@ def _load_params(cfg: dict | None = None) -> dict:
 
 def load_and_crop(image_path: str,
                   params: dict) -> tuple[np.ndarray, np.ndarray, tuple[int, int, int, int]]:
+    """Read the image, scale the ROI from calibration-image coordinates
+    to the current image resolution, and crop.
+
+    Returns (original, crop, scaled_roi).  scaled_roi is the actual pixel
+    bounds of the crop on this particular image — used later for debug overlay."""
     img = cv2.imread(image_path)
     if img is None:
         raise FileNotFoundError("Cannot load: '{}'".format(image_path))
@@ -72,6 +90,7 @@ def load_and_crop(image_path: str,
     if roi is not None:
         y1, y2, x1, x2 = roi
         if ref_dims is not None:
+            # Scale ROI from calibration image size to this image size
             rw, rh = ref_dims
             y1 = int(y1 * h / rh)
             y2 = int(y2 * h / rh)
@@ -82,6 +101,7 @@ def load_and_crop(image_path: str,
         scaled_roi = (y1, y2, x1, x2)
         crop = img[y1:y2, x1:x2]
     else:
+        # No ROI configured — use the full image
         scaled_roi = (0, h, 0, w)
         crop = img.copy()
 
@@ -90,28 +110,40 @@ def load_and_crop(image_path: str,
 
 def build_shelf_mask(bgr_crop: np.ndarray,
                      params: dict) -> tuple[np.ndarray, np.ndarray | None]:
+    """Build a binary mask of the shelf area.
+
+    Strategy: inverse background masking. We detect the shelf background
+    (dark + light zones) via HSV inRange, subtract yogurt lids and price
+    tags, then clean up noise with morphology.
+
+    Returns (shelf_mask, ignore_mask).  shelf_mask has 255 where shelf
+    background is detected.  ignore_mask has 255 on price tags (optional)."""
     hsv      = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
     h, w     = bgr_crop.shape[:2]
     combined = np.zeros((h, w), dtype=np.uint8)
 
+    # Dark shelf background (shadows, back wall)
     dl = params["shelf_dark_lower"]
     du = params["shelf_dark_upper"]
     if dl is not None and du is not None:
         combined = cv2.bitwise_or(combined,
                    cv2.inRange(hsv, dl, du))
 
+    # Light shelf background (bright front areas)
     ll = params["shelf_light_lower"]
     lu = params["shelf_light_upper"]
     if ll is not None and lu is not None:
         combined = cv2.bitwise_or(combined,
                    cv2.inRange(hsv, ll, lu))
 
+    # Yogurt lids — mask them out of the shelf area so they count as product
     yl = params["yogurt_lower"]
     yu = params["yogurt_upper"]
     if yl is not None and yu is not None:
         yogurt   = cv2.inRange(hsv, yl, yu)
         combined = cv2.bitwise_and(combined, cv2.bitwise_not(yogurt))
 
+    # Price tags / barcodes — same treatment
     il = params["ignore_lower"]
     iu = params["ignore_upper"]
     ignore_mask: np.ndarray | None = None
@@ -119,6 +151,7 @@ def build_shelf_mask(bgr_crop: np.ndarray,
         ignore_mask = cv2.inRange(hsv, il, iu)
         combined = cv2.bitwise_and(combined, cv2.bitwise_not(ignore_mask))
 
+    # Morphology: OPEN removes speckle noise, CLOSE fills gaps in shelf area
     k_open  = cv2.getStructuringElement(cv2.MORPH_RECT,
                                         (params["morph_k"], params["morph_k"]))
     k_close = cv2.getStructuringElement(cv2.MORPH_RECT,
@@ -130,6 +163,15 @@ def build_shelf_mask(bgr_crop: np.ndarray,
 
 def build_exclude_mask(crop_shape: tuple, exclude_regions: list,
                         cfg_roi: list[int] | None) -> np.ndarray | None:
+    """Create a mask that blacks out specific rectangle regions.
+
+    Exclusion regions are stored in crop-relative pixel coordinates
+    (drawn on the calibration image crop). Since analysis images may
+    have different resolutions, we scale each rectangle by the ratio
+    of current crop size to calibration crop size.
+
+    cfg_roi is the raw [y1,y2,x1,x2] from config — its dimensions
+    are the reference crop size from calibration."""
     if not exclude_regions:
         return None
     h, w = crop_shape[:2]
@@ -151,6 +193,13 @@ def build_exclude_mask(crop_shape: tuple, exclude_regions: list,
 
 def calculate_stock(mask: np.ndarray,
                     ignore_mask: np.ndarray | None = None) -> dict:
+    """Stock = percentage of pixels NOT matching shelf background.
+
+    High shelf-background pixels = low stock (empty shelf).
+    Low shelf-background pixels = high stock (products covering the background).
+
+    If an ignore_mask is provided (exclusion regions + HSV ignores),
+    those pixels are subtracted from the total so they don't distort the ratio."""
     total    = mask.shape[0] * mask.shape[1]
     shelf_px = cv2.countNonZero(mask)
 
@@ -174,19 +223,24 @@ def save_debug(orig: np.ndarray, mask: np.ndarray,
                scaled_roi: tuple[int, int, int, int],
                image_path: str, stock_pct: float,
                ignore_mask: np.ndarray | None = None) -> str:
+    """Draw the mask onto the original image and write a debug file.
+
+    Shelf area = red overlay.  Ignored/tag areas = blue overlay.
+    Green rectangle = ROI boundary.  Resized to 900px high for easy viewing."""
     y1, y2, x1, x2 = scaled_roi
     h, w = orig.shape[:2]
 
+    # Place the crop-size mask into the full-image-size coordinates
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2] = mask
 
     overlay = orig.copy()
-    overlay[full_mask > 0] = [0, 0, 220]
+    overlay[full_mask > 0] = [0, 0, 220]        # red tint = shelf background
 
     if ignore_mask is not None:
         full_ignore = np.zeros((h, w), dtype=np.uint8)
         full_ignore[y1:y2, x1:x2] = ignore_mask
-        overlay[full_ignore > 0] = [255, 120, 0]
+        overlay[full_ignore > 0] = [255, 120, 0]  # blue tint = tags / excluded
 
     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
@@ -194,6 +248,7 @@ def save_debug(orig: np.ndarray, mask: np.ndarray,
     label = "RED=shelf  BLUE=ignored(tags)  Stock: {}%".format(stock_pct)
     cv2.putText(overlay, label, (8, 24), font, 0.45, (0, 255, 0), 1)
 
+    # Resize to a consistent viewing height
     sc    = 900 / overlay.shape[0]
     w_new = int(overlay.shape[1] * sc)
     debug = cv2.resize(overlay, (w_new, 900))
@@ -206,15 +261,21 @@ def save_debug(orig: np.ndarray, mask: np.ndarray,
 
 
 def analyze(image_path: str, save_debug_img: bool = True) -> dict:
+    """Run the full analysis pipeline on a single photo.
+
+    Returns a dict with stock_pct, empty_pct, alert flag, and file paths.
+    This is the function called by watcher.py and the CLI."""
     cfg    = _get_cfg()
     params = _load_params(cfg)
     orig, crop, scaled_roi = load_and_crop(image_path, params)
     mask, ignore_hsv = build_shelf_mask(crop, params)
 
+    # Build exclusion mask from saved rectangles (price tags, etc.)
     exclude_mask = build_exclude_mask(
         crop.shape, params.get("exclude_regions", []),
         params.get("roi"))
 
+    # Combine HSV-based ignore mask with position-based exclusion mask
     ignore_mask = ignore_hsv
     if exclude_mask is not None:
         if ignore_mask is not None:
@@ -236,6 +297,7 @@ def analyze(image_path: str, save_debug_img: bool = True) -> dict:
 
 
 def print_results(metrics: dict) -> None:
+    """Print a human-readable analysis summary to the terminal."""
     cfg = _get_cfg()
     alert_threshold = cfg.get("alert_threshold", 30.0)
 

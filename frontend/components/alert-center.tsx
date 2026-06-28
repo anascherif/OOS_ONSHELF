@@ -1,5 +1,13 @@
 "use client"
 
+/*
+  Right sidebar — shows alert channel status and triggered alerts.
+  ChannelPill is reused for each configured channel (Telegram, Gmail, WhatsApp).
+  Alerts are listed with timestamp, stock %, and which channels fired.
+
+  Note: alerts come from api.py which filters to today's date only.
+*/
+
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
@@ -50,7 +58,6 @@ export function AlertCenter({
         )}
       </div>
 
-      {/* Channel status */}
       <div className="space-y-2 border-b border-border px-5 py-4">
         <p className="text-xs font-medium text-muted-foreground mb-2">Channel Status</p>
         {channels.length === 0 ? (
@@ -60,7 +67,6 @@ export function AlertCenter({
         )}
       </div>
 
-      {/* Alert log */}
       <div className="px-5 py-4">
         <p className="text-xs font-medium text-muted-foreground mb-2">Alert Log</p>
         {alerts.length === 0 ? (

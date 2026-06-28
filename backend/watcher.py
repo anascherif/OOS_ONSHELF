@@ -1,41 +1,22 @@
 """
-========================================================================
-  SHELFSENSE WATCHER - Automatic shelf monitoring engine
-  Usage : python watcher.py
-  Reads : shelf_config.json  (written by hsv_calibrator.py)
+Automatic shelf monitoring engine.
 
-  WHAT THIS DOES
-  --------------
-  Watches the  incoming/  folder for new photos.
-  When a new photo appears (dropped by camera sync, cloud tool, etc.):
-    1. Waits 2 seconds (ensures file is fully written before reading)
-    2. Runs shelf_monitor.py on the photo
-    3. Appends one row to results.csv
-    4. Saves a debug image to  archive/debug/
-    5. Moves the original photo to  archive/photos/
-    6. Prints alarm to terminal if stock < 30%
-    7. Sends alerts via Gmail / Telegram / WhatsApp (if configured)
+Polling loop that watches the incoming/ folder for new photos.
+Uses snapshot-diff: it remembers which files existed on the previous
+poll cycle and processes any new ones. This avoids needing filesystem
+notifications (which are unreliable on network drives and Windows).
 
-  FOLDER STRUCTURE (auto-created on first run)
-  ---------------------------------------------
-  backend/
-  |-- hsv_calibrator.py
-  |-- shelf_monitor.py
-  |-- watcher.py
-  |-- alerts.py
-  |-- api.py
-  |-- requirements.txt
-  |-- shelf_config.json       <- written by calibrator
-  |-- results.csv             <- one row per photo, auto-created
-  |-- incoming/               <- camera drops photos here
-  +-- archive/
-      |-- photos/             <- processed originals
-      +-- debug/              <- debug overlay images
+On each new file:
+  1. Wait FILE_SETTLE_TIME seconds for the write to complete
+  2. Rename to a timestamped filename (prevents re-processing)
+  3. Run shelf_monitor.analyze() — the core CV pipeline
+  4. Compute financial impact from configurable defaults
+  5. Log one row to results.csv (12 fields)
+  6. Move original to archive/photos/, debug to archive/debug/
+  7. Dispatch alerts if stock is below threshold
 
-  STOPPING THE WATCHER
-  --------------------
-  Press  Ctrl+C  to stop cleanly.
-========================================================================
+Financial totals (daily_loss, daily_missed_units) accumulate in memory
+and reset on restart. They're not persisted between watcher sessions.
 """
 
 import os
@@ -50,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shelf_monitor as monitor
 import alerts
 
+# Fallback values — overridden by shelf_config.json at runtime
 _FINANCIAL_DEFAULTS = {
     "unit_price": 0.5,
     "currency": "TND",
@@ -59,11 +41,13 @@ _FINANCIAL_DEFAULTS = {
     "store_close": 22,
 }
 
+# Reset every time the watcher starts — not saved to disk
 daily_loss         = 0.0
 daily_missed_units = 0.0
 
 
 def _get_financial() -> dict:
+    """Merge config values on top of defaults. Config wins."""
     cfg = monitor._get_cfg()
     return {k: cfg.get(k, v) for k, v in _FINANCIAL_DEFAULTS.items()}
 
@@ -76,9 +60,9 @@ RESULTS_CSV     = _SCRIPT_DIR / "results.csv"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
-SCAN_INTERVAL = 5
+SCAN_INTERVAL = 5  # seconds between polls
 
-FILE_SETTLE_TIME = 2
+FILE_SETTLE_TIME = 2  # seconds to wait before reading a new file
 
 EXPECTED_HEADER = [
     "timestamp",
@@ -97,10 +81,12 @@ EXPECTED_HEADER = [
 
 
 def setup() -> None:
+    """Create the required directories and ensure results.csv exists with headers."""
     INCOMING_DIR.mkdir(exist_ok=True)
     ARCHIVE_PHOTOS.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DEBUG.mkdir(parents=True, exist_ok=True)
 
+    # If CSV exists but has old headers, rewrite it (auto-upgrade)
     needs_header = not RESULTS_CSV.exists()
     if not needs_header:
         with open(RESULTS_CSV, "r") as f:
@@ -125,6 +111,7 @@ def log_result(metrics: dict, filename: str,
                daily_missed_units: float = 0.0,
                projected_loss: float = 0.0,
                recoverable: float = 0.0) -> tuple[str, str]:
+    """Append a single scan result row to results.csv. Returns (timestamp, status)."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status    = "CRITICAL" if metrics["alert"] else "OK"
 
@@ -150,6 +137,7 @@ def log_result(metrics: dict, filename: str,
 
 def handle_alert(metrics: dict, filename: str, timestamp: str,
                  debug_image_path: str | None = None) -> None:
+    """Print alert to terminal and dispatch via configured channels."""
     cfg = monitor._get_cfg()
     threshold = cfg.get("alert_threshold", 30)
 
@@ -172,6 +160,7 @@ def handle_alert(metrics: dict, filename: str, timestamp: str,
 
 
 def process_image(img_path: Path) -> None:
+    """Run analysis on a single image, log results, archive, alert."""
     print()
     print("  " + "-" * 45)
     print("  New photo detected: {}".format(img_path.name))
@@ -180,6 +169,7 @@ def process_image(img_path: Path) -> None:
     try:
         metrics = monitor.analyze(str(img_path), save_debug_img=True)
 
+        # Move debug image to archive
         debug_src: Path | None = Path(metrics["debug_path"]) if metrics["debug_path"] else None
         debug_name = "{}_debug{}".format(img_path.stem, img_path.suffix)
         debug_dst_path: str | None = None
@@ -190,6 +180,7 @@ def process_image(img_path: Path) -> None:
         else:
             debug_name = "none"
 
+        # Financial calculations
         fin = _get_financial()
         empty_rate    = (100.0 - metrics["stock_pct"]) / 100.0
         missed_units  = fin["sales_per_hour"] * fin["scan_interval_hours"] * empty_rate
@@ -198,6 +189,7 @@ def process_image(img_path: Path) -> None:
         daily_loss         += scan_loss
         daily_missed_units += missed_units
 
+        # Projected loss = extrapolate from current daily loss to full day
         now_hour     = datetime.now().hour + datetime.now().minute / 60.0
         hours_elapsed = now_hour - fin["store_open"]
         if hours_elapsed > 0:
@@ -226,6 +218,7 @@ def process_image(img_path: Path) -> None:
         if metrics["alert"]:
             handle_alert(metrics, img_path.name, timestamp, debug_dst_path)
 
+        # Archive the original photo (avoid overwrite with timestamp suffix)
         archive_dst = ARCHIVE_PHOTOS / img_path.name
         if archive_dst.exists():
             stem = img_path.stem
@@ -237,6 +230,7 @@ def process_image(img_path: Path) -> None:
 
     except Exception as e:
         print("  Error processing {}: {}".format(img_path.name, e))
+        # Still archive the file so it won't be retried
         error_dst = ARCHIVE_PHOTOS / img_path.name
         if error_dst.exists():
             stem = img_path.stem
@@ -247,11 +241,13 @@ def process_image(img_path: Path) -> None:
 
 
 def current_incoming_files() -> set[str]:
+    """Return filenames currently in the incoming folder (images only)."""
     return {f.name for f in INCOMING_DIR.iterdir()
             if f.suffix.lower() in IMAGE_EXTS}
 
 
 def watch() -> None:
+    """Main loop: poll incoming/, process new files, sleep, repeat."""
     setup()
 
     print()
@@ -270,16 +266,18 @@ def watch() -> None:
     while True:
         try:
             now_files = current_incoming_files()
-            new_files = now_files - prev_files
+            new_files = now_files - prev_files  # snapshot diff
 
             for fname in sorted(new_files):
                 f = INCOMING_DIR / fname
 
+                # Let the file finish writing (network drives, cloud sync)
                 time.sleep(FILE_SETTLE_TIME)
 
                 if not f.exists():
                     continue
 
+                # Rename to timestamped filename to prevent re-processing
                 ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
                 new_name = "{}{}".format(ts, f.suffix)
                 counter = 1
@@ -294,6 +292,15 @@ def watch() -> None:
 
             prev_files = now_files
 
+            time.sleep(SCAN_INTERVAL)
+
+        except KeyboardInterrupt:
+            print()
+            print("  Watcher stopped. Results saved in results.csv")
+            print()
+            break
+        except Exception as e:
+            print("  Watcher error: {}".format(e))
             time.sleep(SCAN_INTERVAL)
 
         except KeyboardInterrupt:

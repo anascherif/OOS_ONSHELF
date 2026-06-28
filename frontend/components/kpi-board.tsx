@@ -1,5 +1,11 @@
 "use client"
 
+/*
+  KPI board — the top row of cards in the dashboard.
+  4 cards: stock gauge, product status, pixel area analysis, last scan time.
+  Re-renders every 15 seconds when page.tsx polls the API.
+*/
+
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { STATE_META, formatPixels, getStockState, type Scan, type ShelfConfig } from "@/lib/inventory"
@@ -52,7 +58,6 @@ export function KpiBoard({
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-      {/* Capacity gauge */}
       <Card className="flex flex-col items-center justify-center gap-2 p-6">
         <div className="flex w-full items-center gap-2 text-xs font-medium text-muted-foreground">
           <Activity className="size-4" />
@@ -61,7 +66,6 @@ export function KpiBoard({
         <StockGauge stock={latest.stock} />
       </Card>
 
-      {/* Status indicator */}
       <Card className="flex flex-col justify-between p-6">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Boxes className="size-4" />
@@ -87,7 +91,6 @@ export function KpiBoard({
         </div>
       </Card>
 
-      {/* Pixel area */}
       <Card className="flex flex-col justify-between p-6">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <ScanLine className="size-4" />
@@ -120,7 +123,6 @@ export function KpiBoard({
         </div>
       </Card>
 
-      {/* Last scan */}
       <Card className="flex flex-col justify-between p-6">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Clock className="size-4" />

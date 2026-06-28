@@ -1,18 +1,14 @@
 """
-========================================================================
-  SHELFSENSE API - Flask server serving real data to the dashboard
-  Usage : python api.py
-  Port  : 5001 (configurable via API_PORT env var)
+Flask API that serves scan data to the frontend dashboard.
 
-  ENDPOINTS
-  ----------
-  GET /api/latest-scan      - Most recent row from results.csv
-  GET /api/scan-history      - All rows from results.csv
-  GET /api/alert-log          - Critical alert events from CSV
-  GET /api/config             - shelf_config.json contents + financials
-  GET /api/channel-status     - Alert channel health + enabled state
-  GET /api/health             - Service health check
-========================================================================
+Reads results.csv and shelf_config.json directly — no database.
+All endpoints return JSON. CORS is wide-open for local development.
+
+The frontend proxies /api/* through Next.js rewrite rules, so the
+dashboard never needs to know the backend port directly.
+
+Endpoints return only today's data (filtered by _today_rows) so the
+dashboard shows a fresh view per day. The full history stays in results.csv.
 """
 
 import os
@@ -30,6 +26,7 @@ SHELF_CONFIG  = _SCRIPT_DIR / "shelf_config.json"
 ALERT_CONFIG  = _SCRIPT_DIR / "alert_config.json"
 LAST_ALERT_FILE = _SCRIPT_DIR / ".last_alert_time"
 
+# Financial defaults — merged with whatever is in shelf_config.json
 DEFAULTS = {
     "unit_price": 0.5,
     "currency": "TND",
@@ -48,6 +45,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 # ------------------------------------------------------------------
 
 def _load_json(path: Path) -> dict | None:
+    """Read a JSON file, return None if it doesn't exist."""
     if not path.exists():
         return None
     with open(path) as f:
@@ -55,11 +53,14 @@ def _load_json(path: Path) -> dict | None:
 
 
 def _get_financial_config() -> dict:
+    """Merge financial defaults with any overrides in shelf_config.json.
+    This lets users change prices without re-calibrating."""
     cfg = _load_json(SHELF_CONFIG) or {}
     return {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
 
 
 def _read_csv() -> tuple[list[dict], list[str]]:
+    """Load all rows and field names from results.csv."""
     if not RESULTS_CSV.exists():
         return [], []
     with open(RESULTS_CSV, "r") as f:
@@ -70,6 +71,8 @@ def _read_csv() -> tuple[list[dict], list[str]]:
 
 
 def _valid_rows(rows: list[dict]) -> list[dict]:
+    """Filter out rows with empty or malformed timestamps.
+    The CSV header row can get picked up as data — this catches that."""
     out = []
     for r in rows:
         ts = (r.get("timestamp") or "").strip()
@@ -80,6 +83,8 @@ def _valid_rows(rows: list[dict]) -> list[dict]:
 
 
 def _today_rows(rows: list[dict]) -> list[dict]:
+    """Return only rows whose timestamp starts with today's date.
+    This keeps the dashboard focused on the current day."""
     today = datetime.now().strftime("%Y-%m-%d")
     out = []
     for r in rows:
@@ -90,6 +95,8 @@ def _today_rows(rows: list[dict]) -> list[dict]:
 
 
 def _compute_roi_pixels(cfg: dict) -> int:
+    """Total pixels inside the shelf ROI — used to convert
+    stock percentages into absolute pixel counts for the dashboard."""
     roi = cfg.get("roi")
     if not roi or len(roi) != 4:
         return 0
@@ -98,6 +105,8 @@ def _compute_roi_pixels(cfg: dict) -> int:
 
 
 def _row_to_scan(row: dict, roi_pixels: int) -> dict:
+    """Convert a results.csv row into the dashboard's Scan format.
+    Handles missing or malformed timestamps gracefully."""
     stock = float(row.get("stock_pct", 0))
     empty = float(row.get("empty_pct", 100 - stock))
     product_px = int(round(stock / 100.0 * roi_pixels)) if roi_pixels > 0 else 0
@@ -124,6 +133,8 @@ def _row_to_scan(row: dict, roi_pixels: int) -> dict:
 
 
 def _get_enabled_channels(alert_cfg: dict | None) -> list[str]:
+    """Return list of channel names that are enabled in alert_config.json.
+    Falls back to ['Telegram', 'Gmail'] if no config exists."""
     if not alert_cfg:
         return ["Telegram", "Gmail"]
     channels = []
@@ -142,11 +153,14 @@ def _get_enabled_channels(alert_cfg: dict | None) -> list[str]:
 
 @app.route("/api/health")
 def health():
+    """Simple liveness check."""
     return jsonify({"status": "ok", "service": "ShelfSense API"})
 
 
 @app.route("/api/latest-scan")
 def latest_scan():
+    """Return the most recent scan row. Used by the KPI board
+    to show current stock level and financial totals."""
     rows, _ = _read_csv()
     valid = _valid_rows(rows)
     if not valid:
@@ -170,6 +184,7 @@ def latest_scan():
 
 @app.route("/api/scan-history")
 def scan_history():
+    """Return all of today's scans for the depletion chart."""
     rows, _ = _read_csv()
     valid = _valid_rows(rows)
     today = _today_rows(valid)
@@ -181,6 +196,8 @@ def scan_history():
 
 @app.route("/api/alert-log")
 def alert_log():
+    """Return today's critical alerts. WhatsApp is included as a channel
+    when stock drops below 20%, regardless of config."""
     rows, _ = _read_csv()
     valid = _valid_rows(rows)
     today = _today_rows(valid)
@@ -218,6 +235,8 @@ def alert_log():
 
 @app.route("/api/config")
 def config():
+    """Return the full shelf_config.json merged with financial defaults.
+    Also computes roi_total_pixels for the frontend."""
     cfg = _load_json(SHELF_CONFIG)
     if cfg is None:
         return jsonify({
@@ -232,6 +251,8 @@ def config():
 
 @app.route("/api/channel-status")
 def channel_status():
+    """Return each alert channel's enabled state and last-sent timestamp.
+    The dashboard uses this to show which channels are live."""
     alert_cfg = _load_json(ALERT_CONFIG)
 
     last_sent = None

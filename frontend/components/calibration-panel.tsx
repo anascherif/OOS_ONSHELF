@@ -1,5 +1,13 @@
 "use client"
 
+/*
+  Calibration panel — read-only view of shelf_config.json parameters.
+  3 columns: ROI dimensions, HSV color ranges, morphology + financial defaults.
+
+  This is display-only. To change values the user must run hsv_calibrator.py.
+  The 'read-only' badge at the top is intentional — no write-back endpoint exists.
+*/
+
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ShelfConfig } from "@/lib/inventory"
@@ -67,7 +75,6 @@ export function CalibrationPanel({ config }: { config: ShelfConfig | null }) {
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* ROI */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Crop className="size-4 text-muted-foreground" />
@@ -99,7 +106,6 @@ export function CalibrationPanel({ config }: { config: ShelfConfig | null }) {
           )}
         </div>
 
-        {/* HSV ranges */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Palette className="size-4 text-muted-foreground" />
@@ -113,7 +119,6 @@ export function CalibrationPanel({ config }: { config: ShelfConfig | null }) {
           )}
         </div>
 
-        {/* Morphology + Config */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Layers className="size-4 text-muted-foreground" />

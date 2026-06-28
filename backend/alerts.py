@@ -1,26 +1,15 @@
 """
-========================================================================
-  ALERTS - Gmail + Telegram + WhatsApp (via OpenWA)
-  Reads : alert_config.json
+Multi-channel alert dispatch for critical stock levels.
 
-  HOW TO ENABLE EACH CHANNEL
-  ---------------------------
-  1. Open alert_config.json
-  2. Fill in your credentials
-  3. Set "enabled": true for the channels you want active
-  4. Save - no code changes needed
+Supports three channels:
+  - Gmail SMTP (requires app password, 2FA must be enabled)
+  - Telegram Bot API (requires bot token and chat ID)
+  - WhatsApp via OpenWA gateway (self-hosted Node.js server)
 
-  COOLDOWN
-  --------
-  To avoid spamming (camera runs every 15 min, stock might stay
-  critical for hours), alerts are only sent once per
-  "cooldown_minutes" window. Configurable in alert_config.json.
+To avoid flooding when stock stays critical for hours, alerts are
+rate-limited by a cooldown timer (configurable in alert_config.json).
 
-  TESTING
-  -------
-  Run this file directly to send a test alert on all enabled channels:
-      python alerts.py --test
-========================================================================
+Test mode:  python alerts.py --test
 """
 
 import json
@@ -41,6 +30,8 @@ LAST_ALERT_FILE = os.path.join(_SCRIPT_DIR, ".last_alert_time")
 # --- CONFIG LOADING -------------------------------------------------------
 
 def load_config():
+    """Read alert_config.json. Returns None if the file doesn't exist
+    (alerts will be silently skipped)."""
     if not os.path.exists(CONFIG_PATH):
         example = os.path.join(_SCRIPT_DIR, "alert_config.example.json")
         print("  Warning: 'alert_config.json' not found. Alerts disabled.")
@@ -55,6 +46,8 @@ def load_config():
 # --- COOLDOWN --------------------------------------------------------------
 
 def is_in_cooldown(cooldown_minutes):
+    """Check if we sent an alert recently. Reads the last-sent timestamp
+    from a hidden file and compares against the configured interval."""
     if not os.path.exists(LAST_ALERT_FILE):
         return False
     with open(LAST_ALERT_FILE) as f:
@@ -68,6 +61,7 @@ def is_in_cooldown(cooldown_minutes):
 
 
 def update_cooldown():
+    """Write current timestamp to the cooldown marker file."""
     with open(LAST_ALERT_FILE, "w") as f:
         f.write(datetime.now().isoformat())
 
@@ -75,13 +69,11 @@ def update_cooldown():
 # --- GMAIL -----------------------------------------------------------------
 
 def send_gmail(cfg, subject, body, image_path=None):
-    """
-    cfg = {
-        "sender_email"    : "your_email@gmail.com",
-        "app_password"    : "16-char app password (no spaces)",
-        "recipient_email" : "manager@store.com"
-    }
-    """
+    """Send alert via Gmail SMTP.
+
+    Requires an app-specific password (16 chars, no spaces).
+    Normal Gmail password won't work — you need to enable 2FA first
+    and generate an app password in Google Account settings."""
     try:
         msg = MIMEMultipart()
         msg["From"]    = cfg["sender_email"]
@@ -117,12 +109,11 @@ def send_gmail(cfg, subject, body, image_path=None):
 # --- TELEGRAM --------------------------------------------------------------
 
 def send_telegram(cfg, text, image_path=None):
-    """
-    cfg = {
-        "bot_token" : "123456789:ABC...",
-        "chat_id"   : "987654321"
-    }
-    """
+    """Send alert via Telegram bot.
+
+    cfg expects bot_token (from BotFather) and chat_id (the user or group
+    to send to). Bots can't initiate conversations — the user must send
+    /start to the bot first."""
     base_url = "https://api.telegram.org/bot{}".format(cfg['bot_token'])
 
     try:
@@ -163,12 +154,10 @@ def send_telegram(cfg, text, image_path=None):
 # --- WHATSAPP (via OpenWA) -------------------------------------------------
 
 def send_whatsapp(cfg, text):
-    """
-    cfg = {
-        "api_url"          : "http://localhost:8002/send",
-        "recipient_number" : "21612345678"
-    }
-    """
+    """Send alert via a self-hosted OpenWA gateway.
+
+    OpenWA is a Node.js server that bridges HTTP requests to WhatsApp Web.
+    cfg expects api_url (the OpenWA endpoint) and recipient_number."""
     try:
         resp = requests.post(
             cfg["api_url"],
@@ -195,12 +184,10 @@ def send_whatsapp(cfg, text):
 
 def send_stock_alert(stock_pct, threshold, filename, image_path=None,
                      force=False):
-    """
-    Main entry point. Called from watcher.py when stock is critical.
+    """Main entry point — called from watcher.py when stock is critical.
 
-    force=True bypasses cooldown (used for --test).
-    Returns dict of {channel: success_bool} for channels that were enabled.
-    """
+    Sends to all enabled channels. Cooldown is checked unless force=True
+    (used for --test). Returns a dict of {channel: success_bool}."""
     cfg = load_config()
     if cfg is None:
         return {}

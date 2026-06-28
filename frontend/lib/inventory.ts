@@ -1,3 +1,14 @@
+/*
+  Types and fetch wrappers for the ShelfSense backend API.
+
+  Every function in here maps 1:1 to a Flask endpoint in api.py.
+  The API_BASE is empty string by default so all requests go through
+  the Next.js proxy rewrite (/api/* -> localhost:5001/api/*).
+
+  The financial formatters (formatMoney, formatPixels, sumFinancials)
+  exist here so they can be shared across multiple components.
+*/
+
 export type StockState = "stocked" | "warning" | "critical"
 
 export type Scan = {

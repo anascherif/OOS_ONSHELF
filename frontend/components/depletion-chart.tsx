@@ -1,5 +1,11 @@
 "use client"
 
+/*
+  Stock level chart — recharts area chart showing the stock % over today's scans.
+  The dashed red line is the alert threshold (default 30%).
+  Hover over a data point to see exact values and revenue impact.
+*/
+
 import { Card } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart"
 import { formatMoney, type Scan, type ShelfConfig } from "@/lib/inventory"

@@ -1,5 +1,14 @@
 "use client"
 
+/*
+  Financial impact card — shows the revenue consequences of empty shelf space.
+  3 columns: daily lost revenue, missed unit sales, current scan loss.
+
+  The 'recoverable' estimate at the bottom assumes that restocking now
+  stops the loss for the remaining intervals before store close.
+  This is a rough model — adjust constants in shelf_config.json.
+*/
+
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { formatMoney, sumFinancials, type Scan, type ShelfConfig } from "@/lib/inventory"
@@ -46,7 +55,6 @@ export function FinancialImpact({
       </div>
 
       <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        {/* Daily lost revenue */}
         <div className="flex flex-col justify-between gap-3 p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <CircleDollarSign className="size-4" />
@@ -66,7 +74,6 @@ export function FinancialImpact({
           </div>
         </div>
 
-        {/* Missed unit sales */}
         <div className="flex flex-col justify-between gap-3 p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <PackageX className="size-4" />
@@ -85,7 +92,6 @@ export function FinancialImpact({
           </div>
         </div>
 
-        {/* Current scan loss */}
         <div className="flex flex-col justify-between gap-3 p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <ArrowDownRight className="size-4" />

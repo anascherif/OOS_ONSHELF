@@ -1,35 +1,21 @@
 """
-========================================================================
-  HSV CALIBRATOR - Run this ONCE on setup day
-  Usage : python hsv_calibrator.py <reference_photo.jpg>
+One-time setup tool — run this ONCE after installing the camera.
 
-  WHAT THIS DOES
-  --------------
-  1. You draw a crop box  -> defines the shelf area for ALL future photos
-  2. You click shelf colors (dark + light zones)
-  3. You click yogurt colors (to exclude from mask)
-  4. Press S -> saves shelf_config.json
-  5. Never run this again unless camera is moved or shelf repainted
+Usage:  python hsv_calibrator.py <reference_photo.jpg>
 
-  OUTPUT
-  ------
-  shelf_config.json  <- read automatically by shelf_monitor.py + watcher.py
-========================================================================
+Three phases:
+  1. Crop — drag a box around the shelf area
+  2. Sample — click on shelf surfaces to teach the color model
+  3. Exclude — mark price tags / banners that should be ignored
 
-KEYBOARD CONTROLS
------------------
-  PHASE 1 - Crop box (always starts here)
-    Click + drag on image -> draw the shelf crop region
-    Press ENTER           -> confirm crop, move to Phase 2
+Produces shelf_config.json, which shelf_monitor.py and watcher.py read.
+Never run this again unless you move the camera or repaint the shelf.
 
-  PHASE 2 - Color sampling
-    D -> DARK SHELF mode   (shadow / back-of-shelf)
-    L -> LIGHT SHELF mode  (bright / front-of-shelf)
-    Y -> YOGURT mode       (lids / packaging -> exclude)
-    C -> clear current mode points
-    R -> reset all points (keeps crop)
-    S -> save shelf_config.json and exit
-    Q -> quit without saving
+Controls (varies by phase — look at the HUD bar at the top):
+  Phase 1: Click + drag to draw box, ENTER to confirm
+  Phase 2: D/L/Y/I to switch color modes, click to sample, S to proceed
+  Phase 3: Click + drag to draw exclusion rects, ENTER to save
+  Q at any time to quit without saving
 """
 
 import cv2
@@ -43,6 +29,9 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WIN_H        = 700
 CONFIG_PATH  = os.path.join(_SCRIPT_DIR, "shelf_config.json")
 
+# Each mode stores clicked points and their HSV values separately.
+# The tool blends dark + light shelf ranges into one detection mask,
+# then subtracts yogurt (product) areas so only empty shelf is counted.
 MODES = {
     'd': {'name': 'DARK SHELF',         'color': (0, 165, 255), 'points': [], 'hsv': []},
     'l': {'name': 'LIGHT SHELF',        'color': (0, 255, 255), 'points': [], 'hsv': []},
@@ -52,6 +41,8 @@ MODES = {
 
 
 def _find_image(path_arg: str | None) -> str | None:
+    """Try several locations for the reference photo.
+    Checks: exact path → script dir → parent dir → common filenames."""
     if path_arg and os.path.isfile(path_arg):
         return path_arg
     candidates: list[str | None] = [
@@ -67,6 +58,9 @@ def _find_image(path_arg: str | None) -> str | None:
 
 
 def compute_range(hsv_values: list, tol_h=10, tol_s=15, tol_v=25) -> tuple:
+    """Take a list of clicked HSV points and expand them into a
+    detection range by adding tolerance on each axis.
+    Tolerance values are generous because real-world lighting changes."""
     if not hsv_values:
         return None, None
     h = [v[0] for v in hsv_values]
@@ -86,6 +80,10 @@ def compute_range(hsv_values: list, tol_h=10, tol_s=15, tol_v=25) -> tuple:
 
 
 def build_preview_mask(hsv_crop: np.ndarray) -> np.ndarray:
+    """Build a binary mask showing where the shelf surface is detected.
+    Combines dark + light ranges, subtracts yogurt colors,
+    then cleans up noise with morphological operations.
+    This is shown live in Phase 2 so you can adjust your samples."""
     h, w       = hsv_crop.shape[:2]
     shelf_mask = np.zeros((h, w), dtype=np.uint8)
 
@@ -110,6 +108,8 @@ def build_phase1_display(img_orig: np.ndarray, scale: float,
                          crop_box: tuple | None,
                          drag_start: tuple | None,
                          drag_current: tuple | None) -> tuple[np.ndarray, int]:
+    """Render the Phase 1 UI: full image with HUD on top.
+    Shows the drag rectangle in real time as the user draws."""
     ih, iw   = img_orig.shape[:2]
     disp_h   = int(ih * scale)
     disp_w   = int(iw * scale)
@@ -152,6 +152,8 @@ def build_phase3_display(img_crop: np.ndarray, scale: float,
                           exclude_rects: list,
                           drag_start: tuple | None,
                           drag_current: tuple | None) -> tuple[np.ndarray, int]:
+    """Render Phase 3 UI: cropped shelf with exclusion rectangles overlaid.
+    User draws boxes around price tags that should not count as 'empty'."""
     ih, iw   = img_crop.shape[:2]
     disp_h   = int(ih * scale)
     disp_w   = int(iw * scale)
@@ -191,6 +193,10 @@ def build_phase3_display(img_crop: np.ndarray, scale: float,
 def build_phase2_display(img_crop: np.ndarray, hsv_crop: np.ndarray,
                          scale: float, crop_box: tuple,
                          current_mode: str) -> tuple[np.ndarray, int]:
+    """Render Phase 2 UI: side-by-side shelf image + live mask preview.
+    Left: cropped shelf with colored dots showing sampled points.
+    Right: detection mask (shelf turned red) + stock percentage.
+    The live preview updates after every click so you can iterate."""
     ih, iw     = img_crop.shape[:2]
     disp_h     = int(ih * scale)
     disp_w     = int(iw * scale)
@@ -249,6 +255,9 @@ def build_phase2_display(img_crop: np.ndarray, hsv_crop: np.ndarray,
 def save_config(image_path: str, img_orig: np.ndarray,
                 crop_box: tuple | None,
                 exclude_rects: list | None = None) -> bool:
+    """Save everything to shelf_config.json.
+    Computes HSV ranges from the clicked points, bundles them with
+    crop ROI, exclusion regions, and financial defaults."""
     if crop_box is None:
         print("  Warning: No crop box defined. Draw the crop box first.")
         return False
@@ -361,11 +370,16 @@ def main() -> None:
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
     def on_mouse(event: int, wx: int, wy: int, flags: int, param) -> None:
+        """Central mouse handler — behavior changes by phase.
+        Phase 1: drag to draw crop box.
+        Phase 2: click on shelf areas to sample colors.
+        Phase 3: drag to draw exclusion rectangles."""
         nonlocal crop_box, drawing_crop, drag_start, drag_current, phase
         nonlocal img_crop, hsv_crop, current_mode, scale_p2
         nonlocal exclude_rects, drawing_exclude, excl_start, excl_current
 
         if phase == 1:
+            # Phase 1: drag to draw crop box
             ix = int(wx / scale_p1)
             iy = int((wy - 70) / scale_p1)
             ix = max(0, min(ix, iw-1))
@@ -400,6 +414,7 @@ def main() -> None:
                 cv2.imshow(win, frame)
 
         elif phase == 2:
+            # Phase 2: click to sample colors on the shelf
             if event != cv2.EVENT_LBUTTONDOWN:
                 return
             if crop_box is None or img_crop is None or hsv_crop is None:
@@ -412,6 +427,7 @@ def main() -> None:
             panel_w = int(crop_w * scale_p2)
             hud_h = 85
 
+            # If click is on the right panel (mask preview), offset x
             if wx > panel_w:
                 wx = wx - panel_w
 
@@ -432,6 +448,7 @@ def main() -> None:
             cv2.imshow(win, frame)
 
         elif phase == 3:
+            # Phase 3: drag to draw exclusion rectangles around price tags
             if crop_box is None or img_crop is None:
                 return
             crop_h = crop_box[3] - crop_box[1]
@@ -486,6 +503,7 @@ def main() -> None:
             break
 
         elif key == 13 and phase == 1:
+            # ENTER — confirm crop and move to Phase 2
             if crop_box is None:
                 print("  Warning: Draw a crop box first.")
                 continue
@@ -513,6 +531,7 @@ def main() -> None:
             cv2.imshow(win, frame)
 
         elif phase == 2:
+            # Phase 2 keystrokes: switch mode, clear, reset, save
             if   key in (ord('d'), ord('D')):
                 current_mode = 'd'
                 print()
@@ -541,6 +560,7 @@ def main() -> None:
                     m['hsv'].clear()
                 print("  Reset - all color points cleared.")
             elif key in (ord('s'), ord('S')):
+                # S saves config and moves to Phase 3 (exclusion rects)
                 if crop_box is None:
                     continue
                 phase = 3
@@ -572,6 +592,7 @@ def main() -> None:
 
         elif phase == 3:
             if key == 13:
+                # ENTER — save everything and exit
                 if save_config(image_path, img_orig, crop_box, exclude_rects):
                     break
                 continue
@@ -585,6 +606,7 @@ def main() -> None:
                         img_crop, s3, exclude_rects, None, None)
                     cv2.imshow(win, frame)
             elif key in (ord('q'), ord('Q')):
+                # Q goes back to Phase 2
                 phase = 2
                 print()
                 print("  Back to Phase 2. Press S to return to exclusion or edit colors.")

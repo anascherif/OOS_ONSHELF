@@ -76,7 +76,6 @@ export default function Page() {
 
   return (
     <main className="min-h-screen bg-background">
-      {/* Top bar */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 md:px-6">
           <div className="flex items-center gap-3.5">
